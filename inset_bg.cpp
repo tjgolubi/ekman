@@ -10,43 +10,39 @@
 //                   simplified-for-corners perimeter (one value per line)
 //
 // Usage:
-//   inset_smooth_corners <input.xy> <offset_m> <output.xy> [--join miter|round] [--miter 4.0] [--circle 16]
+//   inset_bg <input.xy> <offset_m> <output.xy>
 //
 // Input:  one "x y" per line; not necessarily closed.
 // Output: one "x y" per line; CLOSED ring (last == first).
 
 #include <boost/geometry.hpp>
-#include <boost/geometry/geometries/point_xy.hpp>
-#include <boost/geometry/geometries/polygon.hpp>
-#include <boost/geometry/geometries/multi_polygon.hpp>
-#include <boost/geometry/algorithms/buffer.hpp>
-#include <boost/geometry/algorithms/correct.hpp>
-#include <boost/geometry/algorithms/area.hpp>
-#include <boost/geometry/algorithms/simplify.hpp>
-#include <boost/geometry/algorithms/unique.hpp>
-#include <boost/geometry/algorithms/within.hpp>
-#include <boost/geometry/algorithms/closest_points.hpp>
 
 #include <algorithm>
-#include <cmath>
-#include <exception>
+#include <string>
+#include <vector>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <stdexcept>
-#include <string>
-#include <vector>
+#include <exception>
+#include <limits>
+#include <cmath>
+#include <cstdlib>
 
 namespace bg = boost::geometry;
+namespace fs = std::filesystem;
 
 using Pt       = bg::model::d2::point_xy<double>;
-using Polygon  = bg::model::polygon<Pt, /*CW=*/true, /*Closed=*/true>;
+using Polygon  = bg::model::polygon<Pt>;
 using MP       = bg::model::multi_polygon<Polygon>;
 
 // -------------------- TUNABLES --------------------
 namespace Tunables {
+
+constexpr double kMiterLimit   = 4.0;
+constexpr int    kCirclePoints = 14;
+
 // Geometry cleanup (applied to geometry we will drive)
 constexpr double kSimplifyInputTol    = 0.01; // m; <=0 → skip
 constexpr double kSimplifyInsetTol    = 0.01; // m; <=0 → skip
@@ -63,70 +59,73 @@ constexpr int    kHeadingHalfWin     = 3;    // moving-average half-window (2*H+
 
 // Safety corridor (optional clamp). 0.0 disables.
 constexpr double kCorridorShrink     = 0.0;  // m
-} // namespace Tunables
+} // Tunables
 // -------------------------------------------------
 
-static double SegLen(const Pt& a, const Pt& b) {
-  return std::hypot(b.x() - a.x(), b.y() - a.y());
-}
+namespace {
 
-static std::vector<Pt> EnsureClosed(const std::vector<Pt>& ring) {
+constexpr auto Pi = M_PI;
+constexpr auto TwoPi = 2 * Pi;
+constexpr auto DegPerRad = 180.0 / Pi;
+constexpr auto RadPerDeg = Pi / 180.0;
+
+std::vector<Pt> EnsureClosed(const std::vector<Pt>& ring) {
   if (ring.empty()) return ring;
-  if (ring.front().x() == ring.back().x() && ring.front().y() == ring.back().y())
+  if (ring.front().x() == ring.back().x()
+   && ring.front().y() == ring.back().y())
     return ring;
   auto out = ring;
   out.push_back(ring.front());
   return out;
 }
 
-static std::vector<Pt> ReadPoints(const std::string& path) {
-  std::ifstream in(path);
-  if (!in) throw std::runtime_error("cannot open input: " + path);
+std::vector<Pt> ReadPoints(const fs::path& path) {
+  auto in = std::ifstream{path};
+  if (!in) throw std::runtime_error{"cannot open input: " + path.string()};
   std::vector<Pt> pts;
-  double x{}, y{};
+  double x, y;
   while (in >> x >> y) pts.emplace_back(x, y);
-  if (pts.size() < 3) throw std::runtime_error("not enough points in: " + path);
+  if (pts.size() < 3)
+    throw std::runtime_error{"not enough points in: " + path.string()};
   return pts;
-}
+} // ReadPoints
 
-static void WriteClosed(const std::vector<Pt>& ring, const std::string& path) {
+void WritePoints(const std::vector<Pt>& ring, const fs::path& path) {
   const auto R = EnsureClosed(ring);
-  if (R.size() < 4) throw std::runtime_error("ring degenerate (fewer than 3 unique points)");
-  std::ofstream out(path);
-  if (!out) throw std::runtime_error("cannot open output: " + path);
+  if (R.size() < 4)
+    throw std::runtime_error{"ring degenerate (fewer than 3 unique points)"};
+  auto out = std::ofstream{path};
+  if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
   out.setf(std::ios::fixed);
   out << std::setprecision(6);
   for (auto const& p : R) out << p.x() << ' ' << p.y() << '\n';
-}
+} // WritePoints
 
-static void WriteCornersXY(const std::vector<Pt>& ring_unique,
-                           const std::vector<std::size_t>& idx,
-                           const std::string& path = "corners.xy") {
-  std::ofstream out(path);
-  if (!out) throw std::runtime_error("cannot open corners file: " + path);
+void WriteCorners(const std::vector<Pt>& ring_unique,
+                  const std::vector<std::size_t>& idx,
+                  const fs::path& path = "corners.xy")
+{
+  auto out = std::ofstream{path};
+  if (!out)
+    throw std::runtime_error{"cannot open corners file: " + path.string()};
   out.setf(std::ios::fixed);
   out << std::setprecision(6);
   for (auto i : idx) {
     const auto& c = ring_unique.at(i % ring_unique.size());
     out << c.x() << ' ' << c.y() << '\n';
   }
-}
+} // WriteCorners
 
 // Build polygon from (possibly open) points
-static Polygon MakePolygonFromPoints(const std::vector<Pt>& pts) {
-  Polygon poly;
-  auto& ring = poly.outer();
-  ring.clear();
-  ring.reserve(pts.size() + 1);
-  for (const auto& p : pts) ring.push_back(p);
-  if (ring.size() >= 2 && !bg::equals(ring.front(), ring.back()))
-    ring.push_back(ring.front());
+Polygon MakePolygon(std::vector<Pt> pts) {
+  auto poly = Polygon{};
+  poly.outer() = std::move(pts);
   bg::correct(poly);
   return poly;
 }
 
-static const Polygon& BiggestByArea(const MP& mp) {
-  if (mp.empty()) throw std::runtime_error("buffer produced no polygons (collapsed?)");
+const Polygon& BiggestByArea(const MP& mp) {
+  if (mp.empty()) throw std::runtime_error{"buffer produced no polygons (collapsed?)"};
   const Polygon* best = &mp.front();
   auto best_area = std::abs(bg::area(*best));
   for (const auto& poly : mp) {
@@ -136,61 +135,104 @@ static const Polygon& BiggestByArea(const MP& mp) {
   return *best;
 }
 
-static double Deflection(const Pt& A, const Pt& B, const Pt& C) {
-  // Use AB and BC (forward directions), not BA.
-  const double ux = B.x() - A.x(), uy = B.y() - A.y(); // AB
-  const double vx = C.x() - B.x(), vy = C.y() - B.y(); // BC
-  const double nu = std::hypot(ux, uy), nv = std::hypot(vx, vy);
-  if (nu == 0.0 || nv == 0.0) return 0.0;
-  const double dot = (ux*vx + uy*vy) / (nu*nv);
-  return std::acos(std::clamp(dot, -1.0, 1.0)); // 0..π
-}
+struct Dir {
+  double dx = 0.0;
+  double dy = 0.0;
+}; // Dir
 
-static std::vector<std::size_t>
-CornerIdxOnSimplified(const std::vector<Pt>& S,
-                      double ang_deg,
-                      double min_seg_len)
-{
-  std::vector<std::size_t> idx;
-  const std::size_t n = S.size();
+struct Vec {
+  double dx=0.0;
+  double dy=0.0;
+  constexpr Vec() noexcept = default;
+  constexpr Vec(const Vec&) noexcept = default;
+  constexpr Vec& operator=(const Vec&) noexcept = default;
+  constexpr const Vec& operator+() const noexcept { return *this; }
+  constexpr Vec operator-() const noexcept { return Vec{-dx, -dy}; }
+  constexpr Vec& operator+=(const Vec& rhs) noexcept
+    { dx += rhs.dx; dy += rhs.dy; return *this; }
+  constexpr Vec& operator-=(const Vec& rhs) noexcept
+    { dx -= rhs.dx; dy -= rhs.dy; return *this; }
+  constexpr Vec& operator*=(double s) noexcept
+    { dx *= s; dy *= s; return *this; }
+  constexpr Vec& operator/=(double s) noexcept
+    { dx /= s; dy /= s; return *this; }
+  constexpr Vec operator+(const Vec& rhs) const noexcept
+    { return Vec{dx+rhs.dx, dy+rhs.dy}; }
+  constexpr Vec operator-(const Vec& rhs) const noexcept
+    { return Vec{dx-rhs.dx, dy-rhs.dy}; }
+  constexpr Vec operator*(double s) const noexcept
+    { return Vec{dx*s, dy*s}; }
+  constexpr Vec operator/(double s) const noexcept
+    { return Vec{dx/s, dy/s}; }
+  constexpr friend Vec operator*(double s, const Vec& rhs)
+    { return rhs * s; }
+  constexpr friend double dot(const Vec& u, const Vec& v)
+    { return (u.dx * v.dx + u.dy * v.dy); }
+  constexpr friend double operator*(const Vec& u, const Vec& v)
+    { return dot(u, v); }
+  constexpr friend double cross(const Vec& u, const Vec& v)
+    { return (u.dx * v.dy - u.dy * v.dx); }
+  constexpr double norm2() const { return dx*dx + dy*dy; }
+  constexpr double norm() const { return std::hypot(dx, dy); }
+  constexpr Vec unit() const { return *this / norm(); }
+  constexpr double angle_wrt(const Vec& ref) const
+    { return std::atan2(cross(ref, *this), dot(ref, *this)); }
+}; // Vec
+
+constexpr Vec operator-(const Pt& lhs, const Pt& rhs) noexcept
+  { return Vec{lhs.x-rhs.x, lhs.y-rhs.y}; }
+
+constexpr Pt operator+(const Pt& p, const Vec& v) noexcept
+  { return Pt{p.x() + v.dx, p.y() + v.dy}; }
+
+constexpr Pt operator-(const Pt& p, const Vec& v) noexcept
+  { return Pt{p.x() - v.dx, p.y() - v.dy}; }
+
+constexpr double Dist(const Pt& a, const Pt& b) noexcept
+  { return (a - b).norm(); }
+
+constexpr double Dist2(const Pt& a, const Pt& b) noexcept
+  { return (a - b).norm2(); }
+
+std::vector<gsl::index>
+FindCorners(const Ring& R, double ang_deg, double min_seg_len) {
+  std::vector<gsl::index> idx;
+  const auto n = std::ssize(R);
   if (n < 3) return idx;
-  const double th = ang_deg * M_PI / 180.0;
-  for (std::size_t i = 0; i < n; ++i) {
-    const std::size_t ip = (i + n - 1) % n, in = (i + 1) % n;
-    if (SegLen(S[ip], S[i]) < min_seg_len || SegLen(S[i], S[in]) < min_seg_len) continue;
-    if (Deflection(S[ip], S[i], S[in]) >= th) idx.push_back(i);
+  const double th = ang_deg * RadPerDeg;
+  auto next = R[0] - R[n-2]; // because R[n-1] == R[0] for closed ring
+  for (gsl::index i = 0; i != n-1; ++i) {
+    auto curr = next;
+    next = R[i+1] - R[i];
+    if (std::abs(next.angle_wrt(curr)) >= th) idx.push_back(i);
   }
   return idx;
-}
-
-static inline double D2(const Pt& a, const Pt& b) {
-  const double dx = a.x() - b.x(), dy = a.y() - b.y();
-  return dx*dx + dy*dy;
-}
+} // FindCorners
 
 // Map simplified-corner points to indices in the ORIGINAL ring (ordered match)
-static std::vector<std::size_t>
-MapCornersToOriginal(const std::vector<Pt>& Rorig,
-                     const std::vector<Pt>& Rsimp,
-                     const std::vector<std::size_t>& simp_corners,
+std::vector<gsl::index>
+MapCornersToOriginal(const Ring& Rorig,
+                     const Ring& Rsimp,
+                     const std::vector<gsl::index>& simp_corners,
                      double tol /* meters */)
 {
-  std::vector<std::size_t> out; out.reserve(simp_corners.size());
+  std::vector<gsl::index> out;
+  out.reserve(simp_corners.size());
   if (Rorig.empty() || Rsimp.empty() || simp_corners.empty()) return out;
 
   const double tol2 = tol * tol;
-  std::size_t i0 = 0; // rolling pointer in original ring (unique vertices)
+  auto i0 = gsl::index{0}; // rolling pointer in original ring (unique vertices)
 
-  for (std::size_t k = 0; k < simp_corners.size(); ++k) {
+  for (gsl::index k = 0; k != std::ssize(simp_corners); ++k) {
     const Pt& q = Rsimp[simp_corners[k]];
-    std::size_t best_i = i0;
+    auto best_i = i0;
     double best_d2 = std::numeric_limits<double>::infinity();
 
     // scan forward around the ring once
-    const std::size_t n = Rorig.size();
-    std::size_t i = i0;
-    for (std::size_t t = 0; t < n; ++t) {
-      const double d2 = D2(Rorig[i], q);
+    const auto n = std::ssize(Rorig);
+    auto i = i0;
+    for (gsl::index t = 0; t != n; ++t) {
+      const double d2 = Dist2(Rorig[i], q);
       if (d2 < best_d2) { best_d2 = d2; best_i = i; }
       if (best_d2 <= tol2 && t > 5) break;
       i = (i + 1) % n;
@@ -205,7 +247,7 @@ MapCornersToOriginal(const std::vector<Pt>& Rorig,
 }
 
 // Map ORIGINAL-corner coordinates to nearest indices on the INSET ring (ordered)
-static std::vector<std::size_t>
+std::vector<std::size_t>
 MapOriginalCornersToInset(const std::vector<Pt>& Rinset,
                           const std::vector<Pt>& Rorig,
                           const std::vector<std::size_t>& orig_corner_idx)
@@ -223,7 +265,7 @@ MapOriginalCornersToInset(const std::vector<Pt>& Rinset,
     // scan forward once around inset ring
     std::size_t j = j0;
     for (std::size_t t = 0; t < m; ++t) {
-      const double d2 = D2(Rinset[j], q);
+      const double d2 = Dist2(Rinset[j], q);
       if (d2 < best_d2) { best_d2 = d2; best_j = j; }
       j = (j + 1) % m;
     }
@@ -237,20 +279,21 @@ MapOriginalCornersToInset(const std::vector<Pt>& Rinset,
 }
 
 // ---------- Heading smoothing (between corners) ----------
-static void UnwrapAngles(std::vector<double>& th) {
-  for (std::size_t i = 1; i < th.size(); ++i) {
+void UnwrapAngles(std::vector<double>& th) {
+  for (gsl::index i = 1; i != std::ssize(th.size(); ++i) {
     double d = th[i] - th[i-1];
-    while (d >  M_PI) { th[i] -= 2.0*M_PI; d -= 2.0*M_PI; }
-    while (d < -M_PI) { th[i] += 2.0*M_PI; d += 2.0*M_PI; }
+    while (d >  Pi) { th[i] -= TwoPi; d -= TwoPi; }
+    while (d < -Pi) { th[i] += TwoPi; d += TwoPi; }
   }
 }
 
-static std::vector<double> MovingAverageCircular(const std::vector<double>& v, int half_win) {
+std::vector<double>
+MovingAverageCircular(const Ring& v, int half_win) {
   if (half_win <= 0) return v;
   const int W = 2*half_win + 1;
   const int n = static_cast<int>(v.size());
   std::vector<double> out(n);
-  for (int i = 0; i < n; ++i) {
+  for (int i = 0; i != n; ++i) {
     double s = 0.0;
     for (int k = -half_win; k <= half_win; ++k) {
       int j = i + k;
@@ -261,13 +304,13 @@ static std::vector<double> MovingAverageCircular(const std::vector<double>& v, i
     out[i] = s / W;
   }
   return out;
-}
+} // MovingAverageCircular
 
-static std::vector<Pt> ResamplePolyline(const std::vector<Pt>& seg_pts, double ds) {
+std::vector<Pt> ResamplePolyline(const std::vector<Pt>& seg_pts, double ds) {
   // seg_pts: OPEN polyline (A..B). Returns resampled OPEN list including endpoints.
   std::vector<double> S(seg_pts.size(), 0.0);
   for (std::size_t i = 1; i < seg_pts.size(); ++i)
-    S[i] = S[i-1] + SegLen(seg_pts[i-1], seg_pts[i]);
+    S[i] = S[i-1] + Dist(seg_pts[i-1], seg_pts[i]);
   const double L = S.back();
   if (L == 0.0) return {seg_pts.front(), seg_pts.back()};
   const int N = std::max(2, static_cast<int>(std::round(L / ds)) + 1);
@@ -288,7 +331,7 @@ static std::vector<Pt> ResamplePolyline(const std::vector<Pt>& seg_pts, double d
   return R;
 }
 
-static void ClampToCorridor(std::vector<Pt>& P, const Polygon& corridor) {
+void ClampToCorridor(std::vector<Pt>& P, const Polygon& corridor) {
   for (auto& q : P) {
     if (!bg::within(q, corridor)) {
       bg::model::segment<Pt> seg;
@@ -298,7 +341,7 @@ static void ClampToCorridor(std::vector<Pt>& P, const Polygon& corridor) {
   }
 }
 
-static std::vector<Pt>
+std::vector<Pt>
 SmoothSectionAnchored(const std::vector<Pt>& section_open,
                       double ds, int half_win,
                       const Polygon* corridor /*nullable*/)
@@ -319,7 +362,7 @@ SmoothSectionAnchored(const std::vector<Pt>& section_open,
   std::vector<Pt> out(R.size());
   out.front() = R.front();
   for (std::size_t i = 1; i < R.size(); ++i) {
-    const double step = SegLen(R[i-1], R[i]);
+    const double step = Dist(R[i-1], R[i]);
     const double t = theta[i-1];
     out[i] = Pt(out[i-1].x() + step * std::cos(t),
                 out[i-1].y() + step * std::sin(t));
@@ -332,7 +375,7 @@ SmoothSectionAnchored(const std::vector<Pt>& section_open,
   // Drop exact duplicates from numerical noise
   std::vector<Pt> clean; clean.reserve(out.size());
   for (auto const& p : out) {
-    if (clean.empty() || SegLen(clean.back(), p) > 1e-6) clean.push_back(p);
+    if (clean.empty() || Dist(clean.back(), p) > 1e-6) clean.push_back(p);
   }
 
   // ---- NEW: simplify this smoothed section as a linestring (endpoints preserved)
@@ -355,7 +398,7 @@ SmoothSectionAnchored(const std::vector<Pt>& section_open,
 
 // Assemble full smoothed ring by smoothing each corner-to-corner section (cyclic)
 // ring_unique_inset: unique vertices (no duplicate last)
-static std::vector<Pt>
+std::vector<Pt>
 SmoothBetweenCorners(const std::vector<Pt>& ring_unique_inset,
                      const std::vector<std::size_t>& corners_on_inset,
                      double ds, int half_win,
@@ -397,78 +440,62 @@ SmoothBetweenCorners(const std::vector<Pt>& ring_unique_inset,
 }
 
 // ---- NEW: Write per-vertex deflection (degrees) for the simplified perimeter
-static void WriteDeflectionsDeg(const std::vector<Pt>& S, const std::string& path) {
-  std::ofstream out(path);
-  if (!out) throw std::runtime_error("cannot open deflection file: " + path);
+void WriteDeflectionsDeg(const Ring& R, const fs::path& path) {
+  auto out = std::ofstream{path};
+  if (!out)
+    throw std::runtime_error{"cannot open deflection file: " + path.string()};
   out.setf(std::ios::fixed);
   out << std::setprecision(6);
-  const std::size_t n = S.size();
+  const auto n = std::ssize(R);
   if (n < 3) {
     for (std::size_t i = 0; i < n; ++i) out << 0.0 << '\n';
     return;
   }
+  auto curr = R
   for (std::size_t i = 0; i < n; ++i) {
     const std::size_t ip = (i + n - 1) % n, in = (i + 1) % n;
-    const double ang = Deflection(S[ip], S[i], S[in]); // radians
-    const double deg = ang * 180.0 / M_PI;
-    out << S[i].x() << ' ' << S[i].y() << ' ' << deg << '\n';
+    const double ang = Deflection(R[ip], R[i], R[in]); // radians
+    const double deg = ang * DegPerRad;
+    out << R[i].x() << ' ' << R[i].y() << ' ' << deg << '\n';
   }
 }
 
-int main(int argc, char** argv) {
+} // anonymous
+
+int main(int argc, const char* argv[]) {
   try {
-    if (argc < 4) {
-      throw std::runtime_error(
+    if (argc != 4) {
+      throw std::runtime_error{
         "usage:\n"
-        "  inset_smooth_corners <input.xy> <offset_m> <output.xy>\n"
-        "                       [--join miter|round] [--miter 4.0] [--circle 16]\n"
-      );
+        "  inset_bg <input.xy> <offset_m> <output.xy>\n"
+      };
     }
-    const std::string in_path  = argv[1];
-    const double offset        = std::stod(argv[2]); // inward distance (m)
-    const std::string out_path = argv[3];
 
-    std::string join = "miter";
-    double miter_limit = 4.0;
-    int circle_pts = 16;
+    const auto in_path  = fs::path{argv[1]};
+    const auto offset   = std::stod(argv[2]); // inward distance (m)
+    const auto out_path = fs::path{argv[3]};
 
-    for (int i = 4; i < argc; ++i) {
-      std::string key = argv[i];
-      if (key == "--join" && i + 1 < argc) {
-        join = std::string(argv[++i]);
-        if (join != "miter" && join != "round") {
-          throw std::runtime_error("invalid --join (miter|round)");
-        }
-      } else if (key == "--miter" && i + 1 < argc) {
-        miter_limit = std::stod(argv[++i]);
-        if (miter_limit <= 0.0) throw std::runtime_error("--miter must be > 0");
-      } else if (key == "--circle" && i + 1 < argc) {
-        circle_pts = std::stoi(argv[++i]);
-        if (circle_pts < 4) throw std::runtime_error("--circle must be >= 4");
-      } else {
-        throw std::runtime_error("unknown or incomplete arg: " + key);
-      }
-    }
-    if (offset <= 0.0) throw std::runtime_error("<offset_m> must be > 0");
+    if (offset <= 0.0) throw std::runtime_error{"<offset_m> must be > 0"};
 
     using namespace Tunables;
 
     // ---- Read ORIGINAL perimeter and build polygon
-    const auto raw_pts = ReadPoints(in_path);
-    Polygon poly_in = MakePolygonFromPoints(raw_pts);
+    auto poly_in = MakePolygon(ReadPoints(in_path));
 
     // Optional light cleanup for the path we’ll buffer/drive
     if (kSimplifyInputTol > 0.0) {
-      Polygon simp; bg::simplify(poly_in, simp, kSimplifyInputTol); bg::correct(simp); poly_in = std::move(simp);
+      auto simp = Polygon{};
+      bg::simplify(poly_in, simp, kSimplifyInputTol);
+      poly_in = std::move(simp);
     }
 
     // ---- Corner detection on ORIGINAL perimeter via DP(0.5 m)
-    Polygon poly_dp;
+    auto poly_dp = Polygon{};
     bg::simplify(poly_in, poly_dp, kSimplifyForCorners);
-    bg::correct(poly_dp);
 
     // Extract unique vertices from original & simplified
-    std::vector<Pt> Rorig, Rsimp;
+    auto Rorig = std::vector<Pt>{};
+    auto Rsimp = std::vector<Pt>{};
     Rorig.reserve(poly_in.outer().size());
     for (std::size_t i = 0; i + 1 < poly_in.outer().size(); ++i)
       Rorig.push_back(poly_in.outer()[i]);
@@ -481,75 +508,72 @@ int main(int argc, char** argv) {
     WriteDeflectionsDeg(Rsimp, "deflect.txt");
 
     // Indices on simplified ring (few points)
-    auto simp_corners = CornerIdxOnSimplified(Rsimp, kCornerAngleDeg, kMinSegLen);
+    auto simp_corners = FindCorners(Rsimp, kCornerAngleDeg, kMinSegLen);
     // Map those to indices on the ORIGINAL ring
-    auto orig_corner_idx = MapCornersToOriginal(Rorig, Rsimp, simp_corners, /*tol=*/kSimplifyForCorners);
+    auto orig_corner_idx =
+          MapCornersToOriginal(Rorig, Rsimp, simp_corners, kSimplifyForCorners);
 
     // ---- Inset buffer (negative distance) ----
-    bg::strategy::buffer::distance_symmetric<double> distance(-offset);
-    bg::strategy::buffer::side_straight              side;
-    bg::strategy::buffer::end_flat                   end;
-    bg::strategy::buffer::point_circle               circle(circle_pts);
+    auto distance = bg::strategy::buffer::distance_symmetric<double>{-offset};
+    auto side     = bg::strategy::buffer::side_straight;
+    auto join_m   = bg::strategy::buffer::join_miter{kMiterLimit};
+    auto end      = bg::strategy::buffer::end_flat;
+    auto circle   = bg::strategy::buffer::point_circle{kCirclePoints};
 
-    MP inset_mp;
-    if (join == "miter") {
-      bg::strategy::buffer::join_miter join_m(miter_limit);
-      bg::buffer(poly_in, inset_mp, distance, side, join_m, end, circle);
-    } else {
-      bg::strategy::buffer::join_round join_r;
-      bg::buffer(poly_in, inset_mp, distance, side, join_r, end, circle);
-    }
+    auto inset_mp = MP{};
+    bg::buffer(poly_in, inset_mp, distance, side, join_m, end, circle);
     const Polygon& inset_poly0 = BiggestByArea(inset_mp);
     Polygon inset_poly = inset_poly0;
 
     if (kSimplifyInsetTol > 0.0) {
-      Polygon simp; bg::simplify(inset_poly, simp, kSimplifyInsetTol); bg::correct(simp); inset_poly = std::move(simp);
+      auto simp = Polygon{};
+      bg::simplify(inset_poly, simp, kSimplifyInsetTol);
+      bg::correct(simp);
+      inset_poly = std::move(simp);
       bg::unique(inset_poly);
     }
 
     // Extract INSET unique ring
-    std::vector<Pt> Rinset;
+    auto Rinset = std::vector<Pt>{};
     Rinset.reserve(inset_poly.outer().size());
     for (std::size_t i = 0; i + 1 < inset_poly.outer().size(); ++i)
       Rinset.push_back(inset_poly.outer()[i]);
 
     // Map ORIGINAL-corner positions to INSET ring indices (ordered nearest)
-    auto inset_corner_idx = MapOriginalCornersToInset(Rinset, Rorig, orig_corner_idx);
+    auto inset_corner_idx =
+                      MapOriginalCornersToInset(Rinset, Rorig, orig_corner_idx);
 
     // ---- Optional corridor (disabled here if kCorridorShrink == 0)
-    std::optional<Polygon> corridor;
+    auto corridor = std::optional<Polygon>{};
     if (kCorridorShrink > 0.0) {
       MP corr_mp;
-      bg::strategy::buffer::distance_symmetric<double> dist2(-kCorridorShrink);
-      if (join == "miter") {
-        bg::strategy::buffer::join_miter j2(miter_limit);
-        bg::buffer(inset_poly, corr_mp, dist2, side, j2, end, circle);
-      } else {
-        bg::strategy::buffer::join_round j2;
-        bg::buffer(inset_poly, corr_mp, dist2, side, j2, end, circle);
-      }
+      auto dist2 =
+            bg::strategy::buffer::distance_symmetric<double>{-kCorridorShrink};
+      auto j2 = bg::strategy::buffer::join_miter{kMiterLimit};
+      bg::buffer(inset_poly, corr_mp, dist2, side, j2, end, circle);
       corridor = BiggestByArea(corr_mp);
     }
 
     // ---- Smooth BETWEEN those inset corners
-    auto smoothed_closed = SmoothBetweenCorners(
-      Rinset, inset_corner_idx,
-      kResampleStep, kHeadingHalfWin,
-      corridor ? &*corridor : nullptr);
+    auto smoothed_closed = SmoothBetweenCorners(Rinset, inset_corner_idx,
+              kResampleStep, kHeadingHalfWin, corridor ? &*corridor : nullptr);
 
     // ---- Emit files
-    WriteClosed(smoothed_closed, out_path);
-    WriteCornersXY(Rinset, inset_corner_idx, "corners.xy");
+    WritePoints(smoothed_closed, out_path);
+    WriteCorners(Rinset, inset_corner_idx, "corners.xy");
 
-    std::cout << "Simplified-for-corners vertices: " << Rsimp.size() << "\n";
-    std::cout << "Deflections wrote to deflect.txt (degrees, one per vertex).\n";
-    std::cout << "Corners (>= " << kCornerAngleDeg << " deg): " << inset_corner_idx.size() << "\n";
-    std::cout << "Wrote smoothed inset: " << out_path
-              << "  and corners.xy\n";
-    return 0;
-
-  } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
-    return 1;
+    {
+      using namespace std;
+      cout << "Simplified-for-corners vertices: " << Rsimp.size()
+        << "\nDeflections wrote to deflect.txt (degrees, one per vertex)."
+         "\nCorners (>= " << kCornerAngleDeg << " deg): "
+        << inset_corner_idx.size()
+        << "\nWrote smoothed inset: " << out_path << "  and corners.xy\n";
+    }
   }
-}
+  catch (const std::exception& e) {
+    std::cerr << "error: " << e.what() << '\n';
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+} // main

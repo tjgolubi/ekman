@@ -1,0 +1,13 @@
+set term pngcairo size 1000,800
+if (!exists("infile")) infile = "deflect.txt"
+if (!exists("outfile")) outfile = "deflect.png"
+set output outfile
+if (!exists("titletxt")) titletxt = "Deflections"
+set title titletxt
+
+set xlabel "point"
+set ylabel "deflect (deg)"
+set grid
+set key outside
+
+plot infile using ($0+1):3 with linespoints title "deflect"

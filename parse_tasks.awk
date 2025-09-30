@@ -1,6 +1,7 @@
 BEGIN {
   field = "field0"
   fieldNum = 0
+  innerNum = 0
   fname = "fname-" field "-" fieldNum ".wgs84"
 }
 
@@ -25,12 +26,24 @@ BEGIN {
   field = arr[1]
   gsub(/ +/, "_", field)
   fieldNum = 0
+  innerNum = 0
+  print farm field
 }
 
-/^ *<LSG A="[[:digit:]]+">/ {
+/^ *<LSG A="1".*>/ {
   ++fieldNum
   fname = farm "-" field "_" fieldNum ".wgs84"
+  innerNum = 0
   print "" > fname
+  print fname
+}
+
+/^ *<LSG A="2".*>/ {
+  print "# inner" > fname
+}
+
+/^ *<LSG A="/ {
+  print "Bad field section: ", $0 > "/dev/stderr"
 }
 
 /^ *<PNT A="[[:digit:]]+" C="-?[0-9.]+" D="-?[0-9.]+"/ {
