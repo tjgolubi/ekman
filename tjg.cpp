@@ -48,8 +48,7 @@ using Polygon  = bg::model::polygon<Pt>;
 using MP       = bg::model::multi_polygon<Polygon>;
 using Ring     = bg::model::ring<Pt>;
 
-#if 0
-namespace Tunables {
+namespace Tune {
 
 constexpr double MiterLimit   = 4.0;
 constexpr int    CirclePoints = 14;
@@ -57,10 +56,11 @@ constexpr int    CirclePoints = 14;
 // Geometry cleanup (applied to geometry we will drive)
 constexpr double SimplifyInputTol    = 0.01; // m; <=0 → skip
 constexpr double SimplifyInsetTol    = 0.01; // m; <=0 → skip
-constexpr double SimplifySmoothedTol = 0.04; // try 0.10–0.30
+constexpr double SimplifySmoothedTol = 0.10; // try 0.10–0.30
+constexpr double SimplifyOutputTol   = 0.10; // try 0.10–0.30
 
 // Corner detection (on ORIGINAL perimeter via DP 0.5 m)
-constexpr double SimplifyForCorners = 0.50; // m; Douglas–Peucker for corner detection
+constexpr double SimplifyForCorners = 1.0; // m; Douglas–Peucker for corner detection
 constexpr double CornerAngleDeg     = 45.0; // deflection threshold
 constexpr double MinSegLen          = 0.50; // m; ignore tiny edges near vertex
 
@@ -70,8 +70,8 @@ constexpr int    HeadingHalfWin     = 3;    // moving-average half-window (2*H+1
 
 // Safety corridor (optional clamp). 0.0 disables.
 constexpr double CorridorShrink     = 0.0;  // m
-} // Tunables
-#endif
+
+} // Tune
 
 namespace {
 
@@ -135,21 +135,47 @@ Polygon ReadPolygon(const fs::path& path) {
   }
   bg::correct(poly);
   in.close();
-  std::cerr << "Read " << count << " points, " << inner << "inners\n";
   return poly;
 } // ReadPolygon
 
 void WritePolygon(const Polygon& poly, const fs::path& path) {
-    auto out = std::ofstream{path};
-    if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
+  auto out = std::ofstream{path};
+  if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
+  out << std::fixed << std::setprecision(6);
+  for (const auto& p : poly.outer()) out << p << '\n';
+  out.close();
+  if (poly.inners().empty())
+    return;
+  auto ext  = path.extension();
+  int inner = 0;
+  for (const auto& v : poly.inners()) {
+    auto path2 = path;
+    auto ext2 = fs::path{std::to_string(++inner)};
+    ext2 += ext;
+    path2.replace_extension(ext2);
+    out = std::ofstream{path2};
+    if (!out)
+      throw std::runtime_error{"cannot open output: " + path2.string()};
     out << std::fixed << std::setprecision(6);
-    for (const auto& p : poly.outer()) out << p << '\n';
-    for (const auto& v : poly.inners()) {
-      out << "# inner\n";
-      for (const auto& p : v) out << p << '\n';
-    }
+    for (const auto& p : v) out << p << '\n';
     out.close();
+  }
 } // WritePolygon
+
+void WriteMP(const MP& mp, const fs::path& path) {
+  if (mp.size() == 1) {
+    WritePolygon(mp.front(), path);
+    return;
+  }
+  auto ext = path.extension();
+  int num = 0;
+  for (const auto& p : mp) {
+    auto path2 = path.stem();
+    path2 += std::to_string(++num);
+    path2 += ext;
+    WritePolygon(p, path2);
+  }
+} // WriteMP
 
 // Build polygon from (possibly open) points
 Polygon MakePolygon(std::vector<Pt> pts) {
@@ -176,74 +202,94 @@ void WriteDeflections(const Ring& ring, const fs::path& path) {
   }
 } // WriteDeflections
 
-#if 0
-void WriteCorners(const Ring& ring_unique,
-                  const std::vector<gsl::index>& idx,
+void WriteCorners(const Ring& ring,
+                  const std::vector<gsl::index>& corners,
                   const fs::path& path = "corners.xy")
 {
   auto out = std::ofstream{path};
   if (!out)
     throw std::runtime_error{"cannot open corners file: " + path.string()};
-  out.setf(std::ios::fixed);
-  out << std::setprecision(6);
-  for (auto i : idx) {
-    const auto& c = ring_unique.at(i % ring_unique.size());
+  out << std::fixed << std::setprecision(6);
+  for (auto i : corners) {
+    const auto& c = ring.at(i);
     out << c << '\n';
   }
+  out.close();
 } // WriteCorners
 
 std::vector<gsl::index>
-FindCorners(const Ring& R, double ang_deg, double min_seg_len) {
-  std::vector<gsl::index> idx;
-  const auto n = std::ssize(R);
-  if (n < 3) return idx;
-  const double th = ang_deg * RadPerDeg;
-  auto next = R[0] - R[n-2]; // because R[n-1] == R[0] for closed ring
-  for (gsl::index i = 0; i != n-1; ++i) {
+FindCorners(const Ring& ring) {
+  Expects(ring.front() == ring.back());
+  auto corners = std::vector<gsl::index>{};
+  constexpr auto Theta = Tune::CornerAngleDeg * RadPerDeg;
+  auto n = std::ssize(ring) - 1;
+  auto next = ring[0] - ring[n-1];
+  for (gsl::index i = 0; i != n; ++i) {
     auto curr = next;
-    next = R[i+1] - R[i];
-    if (std::abs(next.angle_wrt(curr)) >= th) idx.push_back(i);
+    next = ring[i+1] - ring[i];
+    if (std::abs(next.angle_wrt(curr)) >= Theta) corners.push_back(i);
   }
-  return idx;
+  return corners;
 } // FindCorners
 
 // Map simplified-corner points to indices in the ORIGINAL ring (ordered match)
 std::vector<gsl::index>
-MapCornersToOriginal(const Ring& Rorig,
-                     const Ring& Rsimp,
-                     const std::vector<gsl::index>& simp_corners,
-                     double tol /* meters */)
+MapCornersToOriginal(const Ring& orig,
+                     const Ring& simp,
+                     const std::vector<gsl::index>& simp_corners)
 {
-  std::vector<gsl::index> out;
+  auto out = std::vector<gsl::index>{};
   out.reserve(simp_corners.size());
-  if (Rorig.empty() || Rsimp.empty() || simp_corners.empty()) return out;
+  if (orig.empty() || simp.empty() || simp_corners.empty()) return out;
 
-  const double tol2 = tol * tol;
-  auto i0 = gsl::index{0}; // rolling pointer in original ring (unique vertices)
+  auto i0 = gsl::index{0};
 
-  for (gsl::index k = 0; k != std::ssize(simp_corners); ++k) {
-    const Pt& q = Rsimp[simp_corners[k]];
-    auto best_i = i0;
-    double best_d2 = std::numeric_limits<double>::infinity();
+  for (auto simp_idx: simp_corners) {
+    const Pt& corner = simp[simp_idx];
+    auto best_i  = i0;
+    auto best_d2 = Dist2(orig[i0], corner);
 
     // scan forward around the ring once
-    const auto n = std::ssize(Rorig);
-    auto i = i0;
-    for (gsl::index t = 0; t != n; ++t) {
-      const auto d2 = Dist2(Rorig[i], q);
+    const auto n = std::ssize(orig) - 1;
+    for (auto i = i0+1; i < n; ++i) {
+      const auto d2 = Dist2(orig[i], corner);
       if (d2 < best_d2) { best_d2 = d2; best_i = i; }
-      if (best_d2 <= tol2 && t > 5) break;
-      i = (i + 1) % n;
     }
     out.push_back(best_i);
-    i0 = (best_i + 1) % Rorig.size();
+    i0 = std::min(gsl::index{0}, best_i + 1);
   }
 
   std::sort(out.begin(), out.end());
   out.erase(std::unique(out.begin(), out.end()), out.end());
   return out;
-}
+} // MapCornersToOriginal
+
+std::vector<gsl::index>
+FindCorners(const Polygon& poly_in) {
+  auto simp = Ring{};
+  bg::simplify(poly_in.outer(), simp, Tune::SimplifyForCorners);
+
+  auto simp_corners = FindCorners(simp);
+  return MapCornersToOriginal(poly_in.outer(), simp, simp_corners);
+} // FindCorners
+
+MP ComputeInset(const Polygon& in, double offset) {
+    // ---- Inset buffer (negative distance) ----
+    auto distance = bg::strategy::buffer::distance_symmetric<double>{-offset};
+    auto side     = bg::strategy::buffer::side_straight{};
+    auto join_m   = bg::strategy::buffer::join_miter{Tune::MiterLimit};
+    auto end      = bg::strategy::buffer::end_flat{};
+    auto circle   = bg::strategy::buffer::point_circle{Tune::CirclePoints};
+
+    auto inset = MP{};
+    bg::buffer(in, inset, distance, side, join_m, end, circle);
+    std::cout << "Inset generated " << inset.size() << " polygons.\n";
+    return inset;
+#if 0
+    const Polygon& inset_poly0 = BiggestByArea(inset_mp);
+    Polygon inset_poly = inset_poly0;
 #endif
+} // ComputeInset
 
 } // anonymous
 
@@ -266,10 +312,24 @@ int main(int argc, const char* argv[]) {
     // ---- Read ORIGINAL perimeter and build polygon
     auto poly_in = ReadPolygon(in_path);
 
+    auto reason = std::string{};
+    if (!bg::is_valid(poly_in, reason)) {
+      std::cerr << "Invalid polygon: " << reason << '\n';
+      return EXIT_FAILURE;
+    }
+    std::cerr << "Polygon is valid\n";
+
     // ---- NEW: Write deflection angles (degrees) for simplified perimeter
     WriteDeflections(poly_in.outer(), "deflect.txt");
 
-    WritePolygon(poly_in, out_path);
+    auto corners = FindCorners(poly_in);
+    WriteCorners(poly_in.outer(), corners);
+
+    auto inset = ComputeInset(poly_in, offset);
+    auto mp_out = MP{};
+    bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
+
+    WriteMP(mp_out, out_path);
 
 #if 0
     // Optional light cleanup for the path we’ll buffer/drive

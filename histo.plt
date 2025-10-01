@@ -1,7 +1,12 @@
+set term pngcairo size 1000,800
+
+if (!exists("outfile")) outfile = "histo.png"
+set output outfile
+
 datafile   = "deflect.txt"
-binwidth   =  5
-xmin       = -180
-xmax       =  180
+binwidth   =  2
+xmin       = -60
+xmax       =  60
 
 # Wrap any angle to (-180, 180]
 wrap(a) = a - 360.0 * floor((a + 180.0) / 360.0)
@@ -9,9 +14,6 @@ wrap(a) = a - 360.0 * floor((a + 180.0) / 360.0)
 # Bin centers from xmin to xmax in steps of binwidth
 # e.g., with binwidth=10: ... -175, -165, ..., 165, 175
 bin(x) = (binwidth * floor((x - xmin) / binwidth)) + (xmin + binwidth/2.0)
-
-set term pngcairo size 1000,800
-set output "histo.png"
 
 set style fill solid 0.6
 set boxwidth binwidth*0.9

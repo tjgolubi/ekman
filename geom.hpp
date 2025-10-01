@@ -2,11 +2,12 @@
 #include <boost/geometry.hpp>
 
 #include <vector>
+#include <numbers>
 #include <cmath>
 
 namespace geom {
 
-constexpr auto Pi = M_PI;
+constexpr auto Pi = std::numbers::pi;
 constexpr auto TwoPi = 2.0 * Pi;
 constexpr auto HalfPi = Pi / 2.0;
 constexpr auto DegPerRad = 180.0 / Pi;
