@@ -229,6 +229,10 @@ FindCorners(const Ring& ring) {
     next = ring[i+1] - ring[i];
     if (std::abs(next.angle_wrt(curr)) >= Theta) corners.push_back(i);
   }
+  using namespace std;
+  cout << corners.size() << " corners found at:\n";
+  for (auto i: corners)
+    cout << setw(3) << i << '\t' << ring[i] << '\n';
   return corners;
 } // FindCorners
 
@@ -270,7 +274,12 @@ FindCorners(const Polygon& poly_in) {
   bg::simplify(poly_in.outer(), simp, Tune::SimplifyForCorners);
 
   auto simp_corners = FindCorners(simp);
-  return MapCornersToOriginal(poly_in.outer(), simp, simp_corners);
+  auto corners =  MapCornersToOriginal(poly_in.outer(), simp, simp_corners);
+  using namespace std;
+  cout << corners.size() << " corners found at:\n";
+  for (auto i: corners)
+    cout << setw(3) << i << '\t' << poly_in.outer()[i] << '\n';
+  return corners;
 } // FindCorners
 
 MP ComputeInset(const Polygon& in, double offset) {
@@ -290,6 +299,57 @@ MP ComputeInset(const Polygon& in, double offset) {
     Polygon inset_poly = inset_poly0;
 #endif
 } // ComputeInset
+
+void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
+  if (ring.size() <= 2) {
+    corners.clear();
+    switch (ring.size()) {
+    case 2: corners.push_back(0);
+            corners.push_back(1);
+            break;
+    case 1: corners.push_back(0); break;
+    case 0: break;
+    }
+    return;
+  }
+  if (ring.front() == ring.back())
+    ring.pop_back();
+  if (corners.empty())
+    corners.push_back(0);
+  if (corners.front() != 0) {
+    auto& ring = poly_in.outer();
+    ring.pop_back(); // duplicate
+    auto mid = std::min(corners.front(), ring.size()-corners.back());
+    if (mid == corners.front()) {
+      for(auto& c: corners)
+        c -= mid;
+    } else {
+      corners.pop_back();
+      for (auto& c: corners)
+        c += mid;
+      corner.push_front(0);
+    }
+    std::rotate(ring.begin(), std::advance(ring.begin(), mid), ring.end();
+    ring.push_back(ring.front());
+  }
+  if (corners.size() < 2) {
+    auto begin  = poly_in.outer().begin();
+    auto end    = poly_in.outer().end();
+    if (*begin == *end)
+      --end;
+    auto farthest_p = ++p;
+    auto farthest_d = Dist(*p, *begin);
+    while (++p != end) {
+      auto d = Dist(*p, *begin);
+      if (d <= farthest_d)
+        continue;
+      farthest_p = p;
+      farthest_d = d;
+    }
+    corners.push_back(std::distance(begin, farthest_p));
+  }
+}
+
 
 } // anonymous
 
@@ -323,6 +383,41 @@ int main(int argc, const char* argv[]) {
     WriteDeflections(poly_in.outer(), "deflect.txt");
 
     auto corners = FindCorners(poly_in);
+    if (corners.empty())
+      corners.push_back(0);
+    if (corners.front() != 0) {
+      auto& ring = poly_in.outer();
+      ring.pop_back(); // duplicate
+      auto mid = std::min(corners.front(), ring.size()-corners.back());
+      if (mid == corners.front()) {
+        for(auto& c: corners)
+          c -= mid;
+      } else {
+        corners.pop_back();
+        for (auto& c: corners)
+          c += mid;
+        corner.push_front(0);
+      }
+      std::rotate(ring.begin(), std::advance(ring.begin(), mid), ring.end();
+      ring.push_back(ring.front());
+    }
+    if (corners.size() < 2) {
+      auto begin  = poly_in.outer().begin();
+      auto end    = poly_in.outer().end();
+      if (*begin == *end)
+        --end;
+      auto farthest_p = ++p;
+      auto farthest_d = Dist(*p, *begin);
+      while (++p != end) {
+        auto d = Dist(*p, *begin);
+        if (d <= farthest_d)
+          continue;
+        farthest_p = p;
+        farthest_d = d;
+      }
+      corners.push_back(std::distance(begin, farthest_p));
+    }
+
     WriteCorners(poly_in.outer(), corners);
 
     auto inset = ComputeInset(poly_in, offset);
