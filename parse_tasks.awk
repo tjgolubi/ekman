@@ -14,6 +14,7 @@ BEGIN {
   name = arr[2]
   gsub(/ +/, "_", name)
   farms[arr[1]] = name
+  next
 }
 
 /^ *<PFD A=".*" C="/ {
@@ -28,6 +29,7 @@ BEGIN {
   fieldNum = 0
   innerNum = 0
   print farm field
+  next
 }
 
 /^ *<LSG A="1".*>/ {
@@ -36,14 +38,17 @@ BEGIN {
   innerNum = 0
   print "" > fname
   print fname
+  next
 }
 
 /^ *<LSG A="2".*>/ {
   print "# inner" > fname
+  next
 }
 
 /^ *<LSG A="/ {
   print "Bad field section: ", $0 > "/dev/stderr"
+  next
 }
 
 /^ *<PNT A="[[:digit:]]+" C="-?[0-9.]+" D="-?[0-9.]+"/ {
@@ -53,4 +58,5 @@ BEGIN {
     next
   }
   print arr[1], arr[2] >> fname
+  next
 }

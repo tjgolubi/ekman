@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <iterator>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -301,25 +302,16 @@ MP ComputeInset(const Polygon& in, double offset) {
 } // ComputeInset
 
 void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
-  if (ring.size() <= 2) {
-    corners.clear();
-    switch (ring.size()) {
-    case 2: corners.push_back(0);
-            corners.push_back(1);
-            break;
-    case 1: corners.push_back(0); break;
-    case 0: break;
-    }
-    return;
-  }
+  Expects(ring.size() >= 3);
+  Expects(ring.front() == ring.back());
   if (ring.front() == ring.back())
     ring.pop_back();
   if (corners.empty())
     corners.push_back(0);
   if (corners.front() != 0) {
-    auto& ring = poly_in.outer();
-    ring.pop_back(); // duplicate
-    auto mid = std::min(corners.front(), ring.size()-corners.back());
+    // Rotate corners so the ring's first coordinate is a corner.
+    auto mid = std::min(corners.front(), std::ssize(ring)-corners.back());
+    std::cout << "Rotating corners: " << mid << '\n';
     if (mid == corners.front()) {
       for(auto& c: corners)
         c -= mid;
@@ -327,16 +319,16 @@ void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
       corners.pop_back();
       for (auto& c: corners)
         c += mid;
-      corner.push_front(0);
+      corners.insert(corners.begin(), 0);
     }
-    std::rotate(ring.begin(), std::advance(ring.begin(), mid), ring.end();
-    ring.push_back(ring.front());
+    std::rotate(ring.begin(), ring.begin() + mid, ring.end());
   }
   if (corners.size() < 2) {
-    auto begin  = poly_in.outer().begin();
-    auto end    = poly_in.outer().end();
-    if (*begin == *end)
-      --end;
+    std::cout << "Adding distant corner: ";
+    // If there's only one corner, add another at the most distant point.
+    const auto begin = ring.begin();
+    const auto end   = ring.end();
+    auto p = begin;
     auto farthest_p = ++p;
     auto farthest_d = Dist(*p, *begin);
     while (++p != end) {
@@ -346,10 +338,12 @@ void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
       farthest_p = p;
       farthest_d = d;
     }
-    corners.push_back(std::distance(begin, farthest_p));
+    auto idx = std::distance(begin, farthest_p);
+    std::cout << idx << ' ' << *farthest_p << '\n';
+    corners.push_back(idx);
   }
-}
-
+  ring.push_back(ring.front()); // close ring
+} // AdjustCorners
 
 } // anonymous
 
@@ -383,41 +377,8 @@ int main(int argc, const char* argv[]) {
     WriteDeflections(poly_in.outer(), "deflect.txt");
 
     auto corners = FindCorners(poly_in);
-    if (corners.empty())
-      corners.push_back(0);
-    if (corners.front() != 0) {
-      auto& ring = poly_in.outer();
-      ring.pop_back(); // duplicate
-      auto mid = std::min(corners.front(), ring.size()-corners.back());
-      if (mid == corners.front()) {
-        for(auto& c: corners)
-          c -= mid;
-      } else {
-        corners.pop_back();
-        for (auto& c: corners)
-          c += mid;
-        corner.push_front(0);
-      }
-      std::rotate(ring.begin(), std::advance(ring.begin(), mid), ring.end();
-      ring.push_back(ring.front());
-    }
-    if (corners.size() < 2) {
-      auto begin  = poly_in.outer().begin();
-      auto end    = poly_in.outer().end();
-      if (*begin == *end)
-        --end;
-      auto farthest_p = ++p;
-      auto farthest_d = Dist(*p, *begin);
-      while (++p != end) {
-        auto d = Dist(*p, *begin);
-        if (d <= farthest_d)
-          continue;
-        farthest_p = p;
-        farthest_d = d;
-      }
-      corners.push_back(std::distance(begin, farthest_p));
-    }
-
+    WriteCorners(poly_in.outer(), corners, "corners0.txt");
+    AdjustCorners(poly_in.outer(), corners);
     WriteCorners(poly_in.outer(), corners);
 
     auto inset = ComputeInset(poly_in, offset);
