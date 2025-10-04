@@ -49,6 +49,8 @@ using Polygon  = bg::model::polygon<Pt>;
 using MP       = bg::model::multi_polygon<Polygon>;
 using Ring     = bg::model::ring<Pt>;
 
+using CornerVec = std::vector<gsl::index>;
+
 namespace Tune {
 
 constexpr double MiterLimit   = 4.0;
@@ -61,7 +63,7 @@ constexpr double SimplifySmoothedTol = 0.10; // try 0.10–0.30
 constexpr double SimplifyOutputTol   = 0.10; // try 0.10–0.30
 
 // Corner detection (on ORIGINAL perimeter via DP 0.5 m)
-constexpr double SimplifyForCorners = 1.0; // m; Douglas–Peucker for corner detection
+constexpr double SimplifyForCorners = 10.0; // m; Douglas–Peucker for corner detection
 constexpr double CornerAngleDeg     = 45.0; // deflection threshold
 constexpr double MinSegLen          = 0.50; // m; ignore tiny edges near vertex
 
@@ -203,24 +205,42 @@ void WriteDeflections(const Ring& ring, const fs::path& path = "deflect.txt") {
   }
 } // WriteDeflections
 
-void WriteCorners(const Ring& ring, const std::vector<gsl::index>& corners,
+void WriteCorners(std::ostream& out, const Ring& ring, const CornerVec& corners)
+{
+  for (auto i : corners) {
+    const auto& c = ring.at(i);
+    out << c << '\n';
+  }
+} // WriteCorners
+
+void WriteCorners(const Ring& ring, const CornerVec& corners,
                   const fs::path& path = "corners.xy")
 {
   auto out = std::ofstream{path};
   if (!out)
     throw std::runtime_error{"cannot open corners file: " + path.string()};
   out << std::fixed << std::setprecision(2);
-  for (auto i : corners) {
-    const auto& c = ring.at(i);
-    out << c << '\n';
-  }
+  WriteCorners(out, ring, corners);
   out.close();
 } // WriteCorners
 
-std::vector<gsl::index>
-FindCorners(const Ring& ring) {
+void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
+                  const fs::path& path = "corners.xy")
+{
+  auto out = std::ofstream{path};
+  if (!out)
+    throw std::runtime_error{"cannot open corners file: " + path.string()};
+  out << std::fixed << std::setprecision(2);
+  auto cp = allCorners.begin();
+  WriteCorners(out, poly.outer(), *cp);
+  for (const auto& r: poly.inners())
+    WriteCorners(out, r, *++cp);
+  out.close();
+} // WriteCorners
+
+CornerVec FindCornersSimp(const Ring& ring) {
   Expects(ring.front() == ring.back());
-  auto corners = std::vector<gsl::index>{};
+  auto corners = CornerVec{};
   constexpr auto Theta = Tune::CornerAngleDeg * RadPerDeg;
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
@@ -235,15 +255,13 @@ FindCorners(const Ring& ring) {
   for (auto i: corners)
     cout << setw(3) << i << '\t' << ring[i] << '\n';
   return corners;
-} // FindCorners
+} // FindCornersSimp
 
 // Map simplified-corner points to indices in the ORIGINAL ring (ordered match)
-std::vector<gsl::index>
-MapCornersToOriginal(const Ring& orig,
-                     const Ring& simp,
-                     const std::vector<gsl::index>& simp_corners)
+CornerVec MapCornersToOriginal(const Ring& orig, const Ring& simp,
+                               const CornerVec& simp_corners)
 {
-  auto out = std::vector<gsl::index>{};
+  auto out = CornerVec{};
   out.reserve(simp_corners.size());
   if (orig.empty() || simp.empty() || simp_corners.empty()) return out;
 
@@ -269,21 +287,20 @@ MapCornersToOriginal(const Ring& orig,
   return out;
 } // MapCornersToOriginal
 
-std::vector<gsl::index>
-FindCorners(const Polygon& poly_in) {
+CornerVec FindCorners(const Ring& ring) {
   auto simp = Ring{};
-  bg::simplify(poly_in.outer(), simp, Tune::SimplifyForCorners);
+  bg::simplify(ring, simp, Tune::SimplifyForCorners);
 
-  auto simp_corners = FindCorners(simp);
-  auto corners =  MapCornersToOriginal(poly_in.outer(), simp, simp_corners);
+  auto simp_corners = FindCornersSimp(simp);
+  auto corners =  MapCornersToOriginal(ring, simp, simp_corners);
   using namespace std;
   cout << corners.size() << " corners found at:\n";
   for (auto i: corners)
-    cout << setw(3) << i << '\t' << poly_in.outer()[i] << '\n';
+    cout << setw(3) << i << '\t' << ring[i] << '\n';
   return corners;
 } // FindCorners
 
-void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
+void AdjustCorners(Ring& ring, CornerVec& corners) {
   Expects(ring.size() >= 3);
   Expects(ring.front() == ring.back());
   ring.pop_back();
@@ -379,10 +396,18 @@ int main(int argc, const char* argv[]) {
     // ---- NEW: Write deflection angles (degrees) for simplified perimeter
     WriteDeflections(poly_in.outer(), "deflect.txt");
 
-    auto corners = FindCorners(poly_in);
-    WriteCorners(poly_in.outer(), corners, "corners0.xy");
-    AdjustCorners(poly_in.outer(), corners);
-    WriteCorners(poly_in.outer(), corners);
+    auto allCorners = std::vector<CornerVec>{};
+    {
+      auto corners = FindCorners(poly_in.outer());
+      AdjustCorners(poly_in.outer(), corners);
+      allCorners.emplace_back(std::move(corners));
+    }
+    for (auto& r: poly_in.inners()) {
+      auto corners = FindCorners(r);
+      AdjustCorners(r, corners);
+      allCorners.emplace_back(std::move(corners));
+    }
+    WriteCorners(poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
     auto mp_out = MP{};
