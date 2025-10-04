@@ -104,7 +104,7 @@ std::vector<Pt> ReadPoints(const fs::path& path) {
 void WritePoints(const std::vector<Pt>& pts, const fs::path& path) {
   auto out = std::ofstream{path};
   if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
-  out << std::fixed << std::setprecision(6);
+  out << std::fixed << std::setprecision(2);
   for (const auto& p : pts) out << p << '\n';
   out.close();
 } // WritePoints
@@ -142,7 +142,7 @@ Polygon ReadPolygon(const fs::path& path) {
 void WritePolygon(const Polygon& poly, const fs::path& path) {
   auto out = std::ofstream{path};
   if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
-  out << std::fixed << std::setprecision(6);
+  out << std::fixed << std::setprecision(2);
   for (const auto& p : poly.outer()) out << p << '\n';
   out.close();
   if (poly.inners().empty())
@@ -157,7 +157,7 @@ void WritePolygon(const Polygon& poly, const fs::path& path) {
     out = std::ofstream{path2};
     if (!out)
       throw std::runtime_error{"cannot open output: " + path2.string()};
-    out << std::fixed << std::setprecision(6);
+    out << std::fixed << std::setprecision(2);
     for (const auto& p : v) out << p << '\n';
     out.close();
   }
@@ -187,12 +187,12 @@ Polygon MakePolygon(std::vector<Pt> pts) {
   return poly;
 }
 
-void WriteDeflections(const Ring& ring, const fs::path& path) {
+void WriteDeflections(const Ring& ring, const fs::path& path = "deflect.txt") {
   Expects(ring.size() >= 3 && ring.front() == ring.back());
   auto out = std::ofstream{path};
   if (!out)
     throw std::runtime_error{"cannot open deflection file: " + path.string()};
-  out << std::fixed << std::setprecision(6);
+  out << std::fixed << std::setprecision(2);
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
   for (auto i = gsl::index{0}; i != n; ++i) {
@@ -203,14 +203,13 @@ void WriteDeflections(const Ring& ring, const fs::path& path) {
   }
 } // WriteDeflections
 
-void WriteCorners(const Ring& ring,
-                  const std::vector<gsl::index>& corners,
+void WriteCorners(const Ring& ring, const std::vector<gsl::index>& corners,
                   const fs::path& path = "corners.xy")
 {
   auto out = std::ofstream{path};
   if (!out)
     throw std::runtime_error{"cannot open corners file: " + path.string()};
-  out << std::fixed << std::setprecision(6);
+  out << std::fixed << std::setprecision(2);
   for (auto i : corners) {
     const auto& c = ring.at(i);
     out << c << '\n';
@@ -224,11 +223,12 @@ FindCorners(const Ring& ring) {
   auto corners = std::vector<gsl::index>{};
   constexpr auto Theta = Tune::CornerAngleDeg * RadPerDeg;
   auto n = std::ssize(ring) - 1;
-  auto next = ring[0] - ring[n-1];
-  for (gsl::index i = 0; i != n; ++i) {
-    auto curr = next;
-    next = ring[i+1] - ring[i];
-    if (std::abs(next.angle_wrt(curr)) >= Theta) corners.push_back(i);
+  auto curr = ring[0] - ring[n-1];
+  for (auto i = gsl::index{0}; i != n; ++i) {
+    auto prev = curr;
+    curr = ring[i+1] - ring[i];
+    auto th  = curr.angle_wrt(prev);
+    if (std::abs(th) >= Theta) corners.push_back(i);
   }
   using namespace std;
   cout << corners.size() << " corners found at:\n";
@@ -283,45 +283,30 @@ FindCorners(const Polygon& poly_in) {
   return corners;
 } // FindCorners
 
-MP ComputeInset(const Polygon& in, double offset) {
-    // ---- Inset buffer (negative distance) ----
-    auto distance = bg::strategy::buffer::distance_symmetric<double>{-offset};
-    auto side     = bg::strategy::buffer::side_straight{};
-    auto join_m   = bg::strategy::buffer::join_miter{Tune::MiterLimit};
-    auto end      = bg::strategy::buffer::end_flat{};
-    auto circle   = bg::strategy::buffer::point_circle{Tune::CirclePoints};
-
-    auto inset = MP{};
-    bg::buffer(in, inset, distance, side, join_m, end, circle);
-    std::cout << "Inset generated " << inset.size() << " polygons.\n";
-    return inset;
-#if 0
-    const Polygon& inset_poly0 = BiggestByArea(inset_mp);
-    Polygon inset_poly = inset_poly0;
-#endif
-} // ComputeInset
-
 void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
   Expects(ring.size() >= 3);
   Expects(ring.front() == ring.back());
-  if (ring.front() == ring.back())
-    ring.pop_back();
+  ring.pop_back();
   if (corners.empty())
     corners.push_back(0);
   if (corners.front() != 0) {
     // Rotate corners so the ring's first coordinate is a corner.
-    auto mid = std::min(corners.front(), std::ssize(ring)-corners.back());
+    auto shift1 = corners.front();
+    auto shift2 = corners.back() - std::ssize(ring);
+    auto mid = (shift1 < -shift2) ? shift1 : shift2;
     std::cout << "Rotating corners: " << mid << '\n';
-    if (mid == corners.front()) {
+    if (mid >= 0) {
       for(auto& c: corners)
         c -= mid;
+      std::rotate(ring.begin(), ring.begin() + mid, ring.end());
     } else {
+      mid = -mid;
       corners.pop_back();
       for (auto& c: corners)
         c += mid;
       corners.insert(corners.begin(), 0);
+      std::rotate(ring.begin(), ring.begin() + (ring.size() - mid), ring.end());
     }
-    std::rotate(ring.begin(), ring.begin() + mid, ring.end());
   }
   if (corners.size() < 2) {
     std::cout << "Adding distant corner: ";
@@ -344,6 +329,24 @@ void AdjustCorners(Ring& ring, std::vector<gsl::index>& corners) {
   }
   ring.push_back(ring.front()); // close ring
 } // AdjustCorners
+
+MP ComputeInset(const Polygon& in, double offset) {
+    // ---- Inset buffer (negative distance) ----
+    auto distance = bg::strategy::buffer::distance_symmetric<double>{-offset};
+    auto side     = bg::strategy::buffer::side_straight{};
+    auto join_m   = bg::strategy::buffer::join_miter{Tune::MiterLimit};
+    auto end      = bg::strategy::buffer::end_flat{};
+    auto circle   = bg::strategy::buffer::point_circle{Tune::CirclePoints};
+
+    auto inset = MP{};
+    bg::buffer(in, inset, distance, side, join_m, end, circle);
+    std::cout << "Inset generated " << inset.size() << " polygons.\n";
+    return inset;
+#if 0
+    const Polygon& inset_poly0 = BiggestByArea(inset_mp);
+    Polygon inset_poly = inset_poly0;
+#endif
+} // ComputeInset
 
 } // anonymous
 
@@ -377,7 +380,7 @@ int main(int argc, const char* argv[]) {
     WriteDeflections(poly_in.outer(), "deflect.txt");
 
     auto corners = FindCorners(poly_in);
-    WriteCorners(poly_in.outer(), corners, "corners0.txt");
+    WriteCorners(poly_in.outer(), corners, "corners0.xy");
     AdjustCorners(poly_in.outer(), corners);
     WriteCorners(poly_in.outer(), corners);
 
