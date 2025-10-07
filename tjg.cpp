@@ -15,9 +15,12 @@
 // Input:  one "x y" per line; not necessarily closed.
 // Output: one "x y" per line; CLOSED ring (last == first).
 
+#include "Smooth.hpp"
+
 #include "geom.hpp"
 
 #include <boost/geometry.hpp>
+#include <boost/preprocessor/stringize.hpp>
 #include <gsl/gsl>
 
 #include <algorithm>
@@ -34,6 +37,13 @@
 #include <limits>
 #include <cmath>
 #include <cstdlib>
+
+template<typename T>
+void DbgOut(const char* str, const T& x) {
+  std::cerr << str << '=' << x << std::endl;
+}
+
+#define DBG(x) DbgOut(BOOST_STRINGIZE(x), (x))
 
 namespace bg = boost::geometry;
 namespace fs = std::filesystem;
@@ -189,11 +199,8 @@ Polygon MakePolygon(std::vector<Pt> pts) {
   return poly;
 }
 
-void WriteDeflections(const Ring& ring, const fs::path& path = "deflect.txt") {
+void WriteDeflections(std::ostream& out, const Ring& ring) {
   Expects(ring.size() >= 3 && ring.front() == ring.back());
-  auto out = std::ofstream{path};
-  if (!out)
-    throw std::runtime_error{"cannot open deflection file: " + path.string()};
   out << std::fixed << std::setprecision(2);
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
@@ -204,6 +211,26 @@ void WriteDeflections(const Ring& ring, const fs::path& path = "deflect.txt") {
     out << ring[i] << ' ' << deg << '\n';
   }
 } // WriteDeflections
+
+void WriteDeflections(std::ostream& out, const Polygon& poly) {
+  WriteDeflections(out, poly.outer());
+  for (const auto& r: poly.inners())
+    WriteDeflections(out, r);
+} // WriteDeflections
+
+void WriteDeflections(std::ostream& out, const MP& mp) {
+  for (const auto& poly: mp)
+    WriteDeflections(out, poly);
+}
+
+template<class Geo>
+void WriteDeflections(const Geo& geo, const fs::path& path = "deflect.txt") {
+  auto out = std::ofstream{path};
+  if (!out)
+    throw std::runtime_error{"cannot open deflection file: " + path.string()};
+  WriteDeflections(out, geo);
+  out.close();
+}
 
 void WriteCorners(std::ostream& out, const Ring& ring, const CornerVec& corners)
 {
@@ -367,6 +394,30 @@ MP ComputeInset(const Polygon& in, double offset) {
 
 } // anonymous
 
+Ring Smooth(Ring ring) {
+  auto corners = FindCorners(ring);
+  AdjustCorners(ring, corners);
+  auto dst = Ring{};
+  auto n = corners.size() - 1;
+  for (auto i = gsl::index{0}; i != n; ++i) {
+    auto line = Smooth(ring, corners[i], corners[i+1]);
+    dst.append_range(line);
+  }
+  bg::correct(dst);
+  return dst;
+} // Smooth ring
+
+void Smooth(Polygon& poly) {
+  poly.outer() = Smooth(poly.outer());
+  for (auto& r: poly.inners())
+    r = Smooth(r);
+} // Smooth polygon
+
+void Smooth(MP& mp) {
+  for (auto& p: mp)
+    Smooth(p);
+} // Smooth multi-polygon
+
 int main(int argc, const char* argv[]) {
   try {
     auto arg0 = fs::path{argv[0]};
@@ -394,7 +445,7 @@ int main(int argc, const char* argv[]) {
     std::cerr << "Polygon is valid\n";
 
     // ---- NEW: Write deflection angles (degrees) for simplified perimeter
-    WriteDeflections(poly_in.outer(), "deflect.txt");
+    WriteDeflections(poly_in, "deflect0.txt");
 
     auto allCorners = std::vector<CornerVec>{};
     {
@@ -410,9 +461,12 @@ int main(int argc, const char* argv[]) {
     WriteCorners(poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
-    auto mp_out = MP{};
-    bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
+    auto mp_out = MP{inset};
+    // bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
 
+    Smooth(mp_out);
+    DBG((mp_out.size()));
+    WriteDeflections(mp_out, "deflect.txt");
     WriteMP(mp_out, out_path);
 
 #if 0
