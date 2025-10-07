@@ -13,6 +13,73 @@ constexpr auto HalfPi = Pi / 2.0;
 constexpr auto DegPerRad = 180.0 / Pi;
 constexpr auto RadPerDeg = Pi / 180.0;
 
+class Radians {
+  double _value = 0.0;
+
+public:
+  constexpr Radians() noexcept = default;
+  constexpr explicit Radians(double v) noexcept : _value{v} { }
+  constexpr Radians(const Radians&) noexcept = default;
+  constexpr Radians& operator=(const Radians&) noexcept = default;
+  constexpr bool operator==(const Radians&) const noexcept = default;
+
+  friend constexpr Radians Normalize(Radians x) noexcept {
+    if (std::is_constant_evaluated()) {
+      while (x._value >   Pi) x._value -= TwoPi;
+      while (x._value <= -Pi) x._value += TwoPi;
+    }
+    else {
+      x._value = std::fmod(x._value + Pi, TwoPi);
+      x._value += (x._value < 0.0) ? Pi : -Pi;
+    }
+    return x;
+  } // Normalize
+
+  constexpr Radians& normalize() noexcept { return *this = Normalize(*this); }
+  constexpr Radians  normalize() const noexcept { return Normalize(*this); }
+
+  constexpr double value() const noexcept { return normalize()._value; }
+  constexpr double value()       noexcept { return normalize()._value; }
+
+  constexpr Radians& operator+=(const Radians& rhs) noexcept
+    { _value += rhs._value; return *this; }
+  constexpr Radians& operator-=(const Radians& rhs) noexcept
+    { _value -= rhs._value; return *this; }
+
+  constexpr Radians operator+() const noexcept { return *this; }
+  constexpr Radians operator-() const noexcept { return Radians{-_value}; }
+
+  constexpr Radians operator+(const Radians& rhs) const noexcept
+    { return Radians{_value + rhs._value}; }
+  constexpr Radians operator-(const Radians& rhs) const noexcept
+    { return Radians{_value - rhs._value}; }
+
+  constexpr Radians operator*(double s) const noexcept
+    { return Radians{_value * s}; }
+  constexpr Radians operator/(double s) const noexcept
+    { return Radians{_value / s}; }
+  constexpr Radians& operator*=(double s) noexcept
+    { _value *= s; return *this; }
+  constexpr Radians& operator/=(double s) noexcept
+    { _value /= s; return *this; }
+
+  friend constexpr Radians operator*(double s, Radians rhs) noexcept
+    { return rhs * s; }
+  friend constexpr double sin(Radians x) noexcept { return std::sin(x._value); }
+  friend constexpr double cos(Radians x) noexcept { return std::cos(x._value); }
+  friend constexpr double tan(Radians x) noexcept { return std::tan(x._value); }
+  friend constexpr Radians abs(Radians x) noexcept
+    { x.normalize(); return (x._value >= 0) ? x : -x; }
+}; // Radians
+
+constexpr Radians FromDegrees(double deg) noexcept
+    { return Radians{deg * RadPerDeg}; }
+
+constexpr Radians ToRadians(double deg) noexcept { return FromDegrees(deg); }
+
+constexpr double ToDegrees(Radians theta) noexcept
+    { return theta.value() * DegPerRad; }
+
 struct Vec {
   double dx=0.0;
   double dy=0.0;
@@ -21,6 +88,8 @@ struct Vec {
   constexpr Vec& operator=(const Vec&) noexcept = default;
   constexpr bool operator==(const Vec&) const noexcept = default;
   constexpr Vec(double dx_, double dy_) : dx{dx_}, dy{dy_} { }
+  constexpr Vec(double mag, Radians theta)
+    : dx{mag * cos(theta)}, dy{mag * sin(theta)} { }
   constexpr const Vec& operator+() const noexcept { return *this; }
   constexpr Vec operator-() const noexcept { return Vec{-dx, -dy}; }
   constexpr Vec& operator+=(const Vec& rhs) noexcept
@@ -42,7 +111,8 @@ struct Vec {
   constexpr double norm2() const noexcept { return dx*dx + dy*dy; }
   constexpr double norm() const noexcept { return std::hypot(dx, dy); }
   constexpr Vec unit() const noexcept { return *this / norm(); }
-  constexpr double angle() const noexcept { return std::atan2(dy, dx); }
+  constexpr Radians angle() const noexcept
+    { return Radians{std::atan2(dy, dx)}; }
   friend constexpr Vec operator*(double s, const Vec& rhs)
     { return rhs * s; }
   friend constexpr double dot(const Vec& u, const Vec& v)
@@ -51,8 +121,8 @@ struct Vec {
     { return dot(u, v); }
   friend constexpr double cross(const Vec& u, const Vec& v) noexcept
     { return u.dx * v.dy - u.dy * v.dx; }
-  constexpr double angle_wrt(const Vec& ref) const noexcept
-    { return std::atan2(cross(ref, *this), dot(ref, *this)); }
+  constexpr Radians angle_wrt(const Vec& ref) const noexcept
+    { return Radians{std::atan2(cross(ref, *this), dot(ref, *this))}; }
 }; // Vec
 
 struct Pt {
@@ -136,11 +206,11 @@ static_assert(p0 + vh == p2);
 static_assert(vh.norm2() == 25.0);
 #if 0
 static_assert(vh.norm() == 5.0);
-static_assert(vx.angle() == 0.0);
-static_assert(vy.angle() == HalfPi);
-static_assert(vh.angle() == std::atan2(4.0, 3.0));
+static_assert(vx.angle() == Radians{0.0});
+static_assert(vy.angle() == Radians{HalfPi});
+static_assert(vh.angle() == Radians{std::atan2(4.0, 3.0)});
 static_assert(vh.angle_wrt(vx) == vh.angle());
-static_assert(vh.angle_wrt(vy) == vh.angle() - HalfPi);
+static_assert(vh.angle_wrt(vy) == vh.angle() - Radians{HalfPi});
 #endif
 } // test
 

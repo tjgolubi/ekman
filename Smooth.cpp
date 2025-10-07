@@ -32,32 +32,35 @@
 #include <boost/math/interpolators/cardinal_cubic_b_spline.hpp>
 
 #include <vector>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 
 namespace bg = boost::geometry;
 
-using Pt   = geom::Pt;
-using Vec  = geom::Vec;
+using Pt  = geom::Pt;
+using Vec = geom::Vec;
+using Radians = geom::Radians;
 using Ring = bg::model::ring<Pt>;
 using Linestring = bg::model::linestring<Pt>;
 
 // ----------------------- Tunables -----------------------------------
 namespace Tune {
-  constexpr double ResampleDs            = 0.25;  // m
-  constexpr double EvalDs                = 0.25;  // m
-  constexpr double SimplifyTol           = 0.10;  // m
-  constexpr std::size_t MinPtsForSmooth  = 8;     // input vertices in arc
-  constexpr double MaxMeanSpacingForSmooth = 0.75; // m
-  constexpr double MaxEdgeForSmooth        = 3.00; // m
+  constexpr double ResampleDs              = 0.25;  // m
+  constexpr double EvalDs                  = 0.25;  // m (kept for uniform step)
+  constexpr double SimplifyTol             = 0.10;  // m
+  constexpr std::size_t MinPtsForSmooth    = 8;
+  constexpr double MaxMeanSpacingForSmooth = 0.75;  // m
+  constexpr double MaxEdgeForSmooth        = 3.00;  // m
+  constexpr int HeadingHalfWin             = 3;     // try 3–5
 } // Tune
 
 namespace {
 
-inline Pt Lerp(const Pt& a, const Pt& b, double t)  { return a + (b - a) * t; }
+constexpr Pt Lerp(const Pt& a, const Pt& b, double t)
+  { return a + (b - a) * t; }
 
 // ----------------------- Preconditions -------------------------------
-inline
 void AssertCornerInvariants(const Ring& r, gsl::index start, gsl::index stop) {
   const auto n     = std::ssize(r);
   const auto nuniq = n - 1;
@@ -77,7 +80,7 @@ Linestring ExtractArc(const Ring& r, gsl::index start, gsl::index stop) {
   return line;
 }
 
-inline double MaxSegmentLen(const Linestring& ls) {
+double MaxSegmentLen(const Linestring& ls) {
   if (std::ssize(ls) < 2) return 0.0;
   auto m = 0.0;
   for (auto i = 1; i != std::ssize(ls); ++i) {
@@ -87,7 +90,7 @@ inline double MaxSegmentLen(const Linestring& ls) {
   return m;
 } // MaxSegmentLen
 
-inline double TotalLen(const Linestring& ls) {
+double TotalLen(const Linestring& ls) {
   if (std::ssize(ls) < 2) return 0.0;
   auto len = 0.0;
   for (auto i = 1; i != std::ssize(ls); ++i)
@@ -95,7 +98,7 @@ inline double TotalLen(const Linestring& ls) {
   return len;
 } // TotalLen
 
-inline bool ShouldSmooth(const Linestring& arc) {
+bool ShouldSmooth(const Linestring& arc) {
   // Dense-only smoothing predicate.
   if (std::ssize(arc) < Tune::MinPtsForSmooth) return false;
 
@@ -110,27 +113,40 @@ inline bool ShouldSmooth(const Linestring& arc) {
   return true;
 } // ShouldSmooth
 
+std::vector<Radians> MovingAverage(const std::vector<Radians>& v, int half_win) {
+  if (half_win <= 0) return v;
+  const auto w = 2*half_win + 1;
+  const auto n = static_cast<int>(std::ssize(v));
+  auto out = std::vector<Radians>{};
+  out.reserve(n);
+  for (int i = 0; i != n; ++i) {
+    auto s = Radians{0.0};
+    for (int k = -half_win; k <= half_win; ++k) {
+      int j = std::clamp(i + k, 0, n-1);
+      s += v[j];
+    }
+    out.push_back(s/w);
+  }
+  return out;
+} // MovingAverage
+
 } // anonymous
 
-// ----------------------- Smoothing ----------------------------------
-Linestring Smooth(const Ring& r, gsl::index start, gsl::index stop) {
-  using boost::math::interpolators::cardinal_cubic_b_spline;
-
-  AssertCornerInvariants(r, start, stop);
+Linestring Smooth(const Ring& ring, gsl::index start, gsl::index stop) {
+  AssertCornerInvariants(ring, start, stop);
 
   // 1) Extract arc
-  auto arc = ExtractArc(r, start, stop);
+  auto arc = ExtractArc(ring, start, stop);
   if (std::ssize(arc) < 2) return arc;
 
-  // If arc is not dense, either return it as-is or optionally simplify.
+  // Sparse → keep (optionally lightly simplify)
   if (!ShouldSmooth(arc)) {
     auto out_sparse = Linestring{};
-    // Optional: light simplify on sparse arcs (often long straight edges).
     bg::simplify(arc, out_sparse, Tune::SimplifyTol);
     return (std::ssize(out_sparse) >= 2) ? out_sparse : arc;
   }
 
-  // 2) Cumulative arclength on the (dense) arc
+  // 2) Cumulative arclength
   auto s = std::vector<double>{};
   s.reserve(arc.size());
   s.push_back(0.0);
@@ -139,49 +155,57 @@ Linestring Smooth(const Ring& r, gsl::index start, gsl::index stop) {
   const auto total = s.back();
   if (total <= 0.0) return arc;
 
-  // 3) Resample to uniform knots
-  const auto kcount =
-    std::max<int>(2, static_cast<int>(std::floor(total/Tune::ResampleDs)) + 1);
-
-  std::vector<double> xs, ys;
-  xs.reserve(kcount); ys.reserve(kcount);
-
-  auto seg = 0;
-  for (auto k = 0; k != kcount; ++k) {
-    const auto sk = (k == kcount - 1) ? total : k * Tune::ResampleDs;
-
-    while ((seg + 1) < std::ssize(s) && s[seg + 1] < sk) ++seg;
-
-    const auto s0 = s[seg];
-    const auto s1 = s[seg+1];
-    const auto t  = (s1 > s0) ? (sk - s0) / (s1 - s0) : 0.0;
-
-    const auto p = Lerp(arc[seg], arc[seg + 1], t);
-    xs.push_back(p.x);
-    ys.push_back(p.y);
+  // 3) Resample to uniform spacing
+  auto r = std::vector<Pt>{};
+  {
+    const auto n = std::max<int>(2,
+                   static_cast<int>(std::floor(total / Tune::ResampleDs)) + 1);
+    r.reserve(n);
+    r.emplace_back(arc.front());
+    auto seg = 0;
+    for (auto k = 1; k != n-1; ++k) {
+      const auto sk = k * (total / (n-1));
+      while (seg + 1 < std::ssize(s) && s[seg+1] < sk) ++seg;
+      const auto s0 = s[seg];
+      const auto s1 = s[seg+1];
+      const auto t  = (s1 > s0) ? (sk - s0) / (s1 - s0) : 0.0;
+      r.emplace_back(Lerp(arc[seg], arc[seg+1], t));
+    }
+    r.emplace_back(arc.back());
   }
 
-  // 4) Fit cubic B-splines
-  const auto dx =
-              (kcount > 1) ? (total / static_cast<double>(kcount - 1)) : total;
+  // 4) Compute per-step headings on the resampled chain
+  auto theta = std::vector<Radians>{};
+  {
+    const auto n = std::ssize(r) - 1;
+    theta.reserve(n);
+    for (auto i = 0; i != n; ++i) {
+      const auto v = r[i+1] - r[i];
+      theta.push_back(v.angle());
+    }
+  }
 
-  auto sx = cardinal_cubic_b_spline<double>{xs.begin(), xs.end(), 0.0, dx};
-  auto sy = cardinal_cubic_b_spline<double>{ys.begin(), ys.end(), 0.0, dx};
+  // 5) Smooth the headings directly (reduces per-vertex deflection)
+  auto theta_s = MovingAverage(theta, Tune::HeadingHalfWin);
 
-  // 5) Evaluate spline
+  // 6) Reconstruct positions by integrating the smoothed headings
   auto smooth = Linestring{};
-  const auto scount =
-        std::max<int>(2, static_cast<int>(std::floor(total/Tune::EvalDs)) + 1);
-
-  smooth.reserve(scount);
-  for (auto i = 0; i != scount-1; ++i) {
-    const auto si = i * Tune::EvalDs;
-    smooth.emplace_back(sx(si), sy(si));
+  {
+    const auto n = std::ssize(r);
+    smooth.resize(n);
+    smooth[0] = r[0];
+    const double step = total / (n - 1);
+    for (auto i = 1; i != n; ++i)
+      smooth[i] = smooth[i-1] + Vec{step, theta_s[i-1]};
+    // force exact endpoint
+    smooth.back() = r.back();
   }
-  smooth.emplace_back(sx(total), sy(total));
 
-  // 6) Simplify
-  auto out = Linestring{};
-  bg::simplify(smooth, out, Tune::SimplifyTol);
-  return (std::ssize(out) < 2) ? smooth : out;
-} // Smooth
+  // 7) Optional post-simplify (keeps endpoints)
+  if (Tune::SimplifyTol > 0.0 && std::ssize(smooth) > 2) {
+    auto out = Linestring{};
+    bg::simplify(smooth, out, Tune::SimplifyTol);
+    if (std::ssize(out) >= 2) return out;
+  }
+  return smooth;
+}

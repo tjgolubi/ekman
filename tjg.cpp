@@ -207,7 +207,7 @@ void WriteDeflections(std::ostream& out, const Ring& ring) {
   for (auto i = gsl::index{0}; i != n; ++i) {
     auto prev = curr;
     curr = ring[i+1] - ring[i];
-    auto deg  = curr.angle_wrt(prev) * DegPerRad;
+    auto deg  = ToDegrees(curr.angle_wrt(prev));
     out << ring[i] << ' ' << deg << '\n';
   }
 } // WriteDeflections
@@ -268,14 +268,14 @@ void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
 CornerVec FindCornersSimp(const Ring& ring) {
   Expects(ring.front() == ring.back());
   auto corners = CornerVec{};
-  constexpr auto Theta = Tune::CornerAngleDeg * RadPerDeg;
+  constexpr auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
   for (auto i = gsl::index{0}; i != n; ++i) {
     auto prev = curr;
     curr = ring[i+1] - ring[i];
     auto th  = curr.angle_wrt(prev);
-    if (std::abs(th) >= Theta) corners.push_back(i);
+    if (std::abs(th.value()) >= Theta) corners.push_back(i);
   }
   using namespace std;
   cout << corners.size() << " corners found at:\n";
@@ -447,6 +447,7 @@ int main(int argc, const char* argv[]) {
     // ---- NEW: Write deflection angles (degrees) for simplified perimeter
     WriteDeflections(poly_in, "deflect0.txt");
 
+#if 0
     auto allCorners = std::vector<CornerVec>{};
     {
       auto corners = FindCorners(poly_in.outer());
@@ -461,7 +462,10 @@ int main(int argc, const char* argv[]) {
     WriteCorners(poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
-    auto mp_out = MP{inset};
+#endif
+
+    auto mp_out = MP{};
+    mp_out.emplace_back(poly_in);
     // bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
 
     Smooth(mp_out);
