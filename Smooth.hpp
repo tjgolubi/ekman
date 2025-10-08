@@ -11,8 +11,8 @@
 #pragma once
 #include "geom.hpp"
 #include <boost/geometry.hpp>
-#include <gsl/gsl>
+#include <gsl-lite/gsl-lite.hpp>
 
 boost::geometry::model::linestring<geom::Pt>
 Smooth(const boost::geometry::model::ring<geom::Pt>& r,
-       gsl::index start, gsl::index stop);
+       gsl_lite::index start, gsl_lite::index stop);

@@ -1,6 +1,7 @@
 #pragma once
 #include <boost/geometry.hpp>
 
+#include <gsl-lite/gsl-lite.hpp>
 #include <numbers>
 #include <cmath>
 
@@ -98,7 +99,10 @@ struct Vec {
   constexpr bool operator==(const Vec&) const noexcept = default;
   constexpr Vec(double dx_, double dy_) : dx{dx_}, dy{dy_} { }
   constexpr Vec(double mag, Radians theta)
-    : dx{mag * cos(theta)}, dy{mag * sin(theta)} { }
+    : dx{mag * cos(theta)}, dy{mag * sin(theta)}
+  {
+    gsl_Expects(mag >= 0.0);
+  }
   constexpr const Vec& operator+() const noexcept { return *this; }
   constexpr Vec operator-() const noexcept { return Vec{-dx, -dy}; }
   constexpr Vec& operator+=(const Vec& rhs) noexcept

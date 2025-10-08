@@ -1,4 +1,4 @@
-set term pngcairo size 1000,800
+set term pngcairo size 3000,2400
 if (!exists("infile")) infile = "deflect.txt"
 if (!exists("outfile")) outfile = "deflect.png"
 set output outfile
@@ -11,7 +11,5 @@ set grid
 set key outside
 
 set yrange [-45:45]
-plot infile using ($0+1):3 with lines title "deflect"
-
-#set yrange [0:60]
-#plot infile using ($0+1):(abs($3)) with lines title "deflect"
+plot "deflect0.txt" using 3:4 with lines lc rgb "blue" title "deflect0", \
+     "deflect.txt"  using 3:4 with lines lc rgb "red"  title "deflect"

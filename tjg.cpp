@@ -21,7 +21,8 @@
 
 #include <boost/geometry.hpp>
 #include <boost/preprocessor/stringize.hpp>
-#include <gsl/gsl>
+#include <gsl-lite/gsl-lite.hpp>
+namespace gsl = gsl_lite;
 
 #include <algorithm>
 #include <string>
@@ -67,8 +68,8 @@ constexpr double MiterLimit   = 4.0;
 constexpr int    CirclePoints = 14;
 
 // Geometry cleanup (applied to geometry we will drive)
-constexpr double SimplifyInputTol    = 0.01; // m; <=0 → skip
-constexpr double SimplifyInsetTol    = 0.01; // m; <=0 → skip
+constexpr double SimplifyInputTol    = 0.10; // m; <=0 → skip
+constexpr double SimplifyInsetTol    = 0.10; // m; <=0 → skip
 constexpr double SimplifySmoothedTol = 0.10; // try 0.10–0.30
 constexpr double SimplifyOutputTol   = 0.10; // try 0.10–0.30
 
@@ -195,12 +196,12 @@ Polygon MakePolygon(std::vector<Pt> pts) {
   auto ring = Ring{pts.begin(), pts.end()};
   auto poly = Polygon{ring};
   bg::correct(poly);
-  Expects(poly.outer().front() == poly.outer().back());
+  gsl_Expects(poly.outer().front() == poly.outer().back());
   return poly;
 }
 
-void WriteDeflections(std::ostream& out, const Ring& ring) {
-  Expects(ring.size() >= 3 && ring.front() == ring.back());
+void WriteDeflections(std::ostream& out, const Ring& ring, double& dist) {
+  gsl_Expects(ring.size() >= 3 && ring.front() == ring.back());
   out << std::fixed << std::setprecision(2);
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
@@ -208,19 +209,20 @@ void WriteDeflections(std::ostream& out, const Ring& ring) {
     auto prev = curr;
     curr = ring[i+1] - ring[i];
     auto deg  = ToDegrees(curr.angle_wrt(prev));
-    out << ring[i] << ' ' << deg << '\n';
+    out << ring[i] << ' ' << dist << ' ' << deg << '\n';
+    dist += curr.norm();
   }
 } // WriteDeflections
 
-void WriteDeflections(std::ostream& out, const Polygon& poly) {
-  WriteDeflections(out, poly.outer());
+void WriteDeflections(std::ostream& out, const Polygon& poly, double& dist) {
+  WriteDeflections(out, poly.outer(), dist);
   for (const auto& r: poly.inners())
-    WriteDeflections(out, r);
+    WriteDeflections(out, r, dist);
 } // WriteDeflections
 
-void WriteDeflections(std::ostream& out, const MP& mp) {
+void WriteDeflections(std::ostream& out, const MP& mp, double& dist) {
   for (const auto& poly: mp)
-    WriteDeflections(out, poly);
+    WriteDeflections(out, poly, dist);
 }
 
 template<class Geo>
@@ -228,7 +230,8 @@ void WriteDeflections(const Geo& geo, const fs::path& path = "deflect.txt") {
   auto out = std::ofstream{path};
   if (!out)
     throw std::runtime_error{"cannot open deflection file: " + path.string()};
-  WriteDeflections(out, geo);
+  auto dist = 0.0;
+  WriteDeflections(out, geo, dist);
   out.close();
 }
 
@@ -266,7 +269,7 @@ void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
 } // WriteCorners
 
 CornerVec FindCornersSimp(const Ring& ring) {
-  Expects(ring.front() == ring.back());
+  gsl_Expects(ring.front() == ring.back());
   auto corners = CornerVec{};
   const auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
   auto n = std::ssize(ring) - 1;
@@ -328,8 +331,8 @@ CornerVec FindCorners(const Ring& ring) {
 } // FindCorners
 
 void AdjustCorners(Ring& ring, CornerVec& corners) {
-  Expects(ring.size() >= 3);
-  Expects(ring.front() == ring.back());
+  gsl_Expects(ring.size() >= 3);
+  gsl_Expects(ring.front() == ring.back());
   ring.pop_back();
   if (corners.empty())
     corners.push_back(0);
@@ -397,8 +400,9 @@ MP ComputeInset(const Polygon& in, double offset) {
 Ring Smooth(Ring ring) {
   auto corners = FindCorners(ring);
   AdjustCorners(ring, corners);
+  corners.push_back(ring.size()-1);
   auto dst = Ring{};
-  auto n = corners.size() - 1;
+  const auto n = corners.size() - 1;
   for (auto i = gsl::index{0}; i != n; ++i) {
     auto line = Smooth(ring, corners[i], corners[i+1]);
     dst.append_range(line);
@@ -444,10 +448,6 @@ int main(int argc, const char* argv[]) {
     }
     std::cerr << "Polygon is valid\n";
 
-    // ---- NEW: Write deflection angles (degrees) for simplified perimeter
-    WriteDeflections(poly_in, "deflect0.txt");
-
-#if 0
     auto allCorners = std::vector<CornerVec>{};
     {
       auto corners = FindCorners(poly_in.outer());
@@ -462,11 +462,10 @@ int main(int argc, const char* argv[]) {
     WriteCorners(poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
-#endif
+    WriteDeflections(inset, "deflect0.txt");
 
     auto mp_out = MP{};
-    mp_out.emplace_back(poly_in);
-    // bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
+    bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
 
     Smooth(mp_out);
     DBG((mp_out.size()));
