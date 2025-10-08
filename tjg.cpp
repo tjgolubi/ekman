@@ -268,7 +268,7 @@ void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
 CornerVec FindCornersSimp(const Ring& ring) {
   Expects(ring.front() == ring.back());
   auto corners = CornerVec{};
-  constexpr auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
+  const auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
   for (auto i = gsl::index{0}; i != n; ++i) {
