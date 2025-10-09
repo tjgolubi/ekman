@@ -90,19 +90,24 @@ constexpr Radians ToRadians(double deg) noexcept { return FromDegrees(deg); }
 constexpr double ToDegrees(Radians theta) noexcept
     { return theta.value() * DegPerRad; }
 
+template<typename U> struct SquaredType { using type = U; };
+template<typename U>
+using SquaredTypeT = SquaredType<U>::type;
+
+template<typename Units=double>
 struct Vec {
-  double dx=0.0;
-  double dy=0.0;
+  using value_type   = Units;
+  using squared_type = SquaredTypeT<Units>;
+  value_type dx = value_type{};
+  value_type dy = value_type{};
   constexpr Vec() noexcept = default;
   constexpr Vec(const Vec&) noexcept = default;
   constexpr Vec& operator=(const Vec&) noexcept = default;
   constexpr bool operator==(const Vec&) const noexcept = default;
-  constexpr Vec(double dx_, double dy_) : dx{dx_}, dy{dy_} { }
-  constexpr Vec(double mag, Radians theta)
+  constexpr Vec(value_type dx_, value_type dy_) : dx{dx_}, dy{dy_} { }
+  constexpr Vec(value_type mag, Radians theta)
     : dx{mag * cos(theta)}, dy{mag * sin(theta)}
-  {
-    gsl_Expects(mag >= 0.0);
-  }
+    { gsl_Expects(mag >= value_type{0}); }
   constexpr const Vec& operator+() const noexcept { return *this; }
   constexpr Vec operator-() const noexcept { return Vec{-dx, -dy}; }
   constexpr Vec& operator+=(const Vec& rhs) noexcept
@@ -121,59 +126,60 @@ struct Vec {
     { return Vec{dx*s, dy*s}; }
   constexpr Vec operator/(double s) const noexcept
     { return Vec{dx/s, dy/s}; }
-  constexpr double norm2() const noexcept { return dx*dx + dy*dy; }
-  constexpr double norm() const noexcept { return std::hypot(dx, dy); }
+  constexpr squared_type norm2() const noexcept { return dx*dx + dy*dy; }
+  constexpr value_type norm() const noexcept { return std::hypot(dx, dy); }
   constexpr Vec unit() const noexcept { return *this / norm(); }
   constexpr Radians angle() const noexcept
     { return geom::atan2(dy, dx); }
   friend constexpr Vec operator*(double s, const Vec& rhs)
     { return rhs * s; }
-  friend constexpr double dot(const Vec& u, const Vec& v)
+  friend constexpr squared_type dot(const Vec& u, const Vec& v)
     { return u.dx * v.dx + u.dy * v.dy; }
-  friend constexpr double operator*(const Vec& u, const Vec& v)
+  friend constexpr squared_type operator*(const Vec& u, const Vec& v)
     { return dot(u, v); }
-  friend constexpr double cross(const Vec& u, const Vec& v) noexcept
+  friend constexpr squared_type cross(const Vec& u, const Vec& v) noexcept
     { return u.dx * v.dy - u.dy * v.dx; }
   constexpr Radians angle_wrt(const Vec& ref) const noexcept
     { return geom::atan2(cross(ref, *this), dot(ref, *this)); }
 }; // Vec
 
+template<typename Units=double>
 struct Pt {
-  double x = 0.0;
-  double y = 0.0;
+  Units x = Units{};
+  Units y = Units{};
   constexpr Pt() = default;
   constexpr Pt(const Pt&) = default;
   constexpr Pt& operator=(const Pt&) = default;
   constexpr bool operator==(const Pt&) const = default;
-  constexpr Pt(double x_, double y_) : x{x_}, y{y_} { }
+  constexpr Pt(Units x_, Units y_) : x{x_}, y{y_} { }
 }; // Pt
 
 } // geom
 
 namespace boost::geometry::traits {
 
-template<>
-struct tag<geom::Pt> { using type = point_tag; };
+template<typename U>
+struct tag<geom::Pt<U>> { using type = point_tag; };
 
-template<>
-struct coordinate_type<geom::Pt> { using type = double; };
+template<typename U>
+struct coordinate_type<geom::Pt<U>> { using type = U; };
 
-template<>
-struct coordinate_system<geom::Pt> { using type = cs::cartesian; };
+template<typename U>
+struct coordinate_system<geom::Pt<U>> { using type = cs::cartesian; };
 
-template<>
-struct dimension<geom::Pt> : std::integral_constant<std::size_t, 2> { };
+template<typename U>
+struct dimension<geom::Pt<U>> : std::integral_constant<std::size_t, 2> { };
 
-template<std::size_t Dim>
+template<std::size_t Dim, typename U>
 requires (Dim == 0 || Dim == 1)
-struct access<geom::Pt, Dim> {
-  static constexpr double get(const geom::Pt& p) {
+struct access<geom::Pt<U>, Dim> {
+  static constexpr U get(const geom::Pt<U>& p) {
     if constexpr (Dim == 0)
       return p.x;
     else
       return p.y;
   }
-  static constexpr void set(geom::Pt& p, double v) {
+  static constexpr void set(geom::Pt<U>& p, U v) {
     if constexpr (Dim == 0)
       p.x = v;
     else
@@ -181,11 +187,11 @@ struct access<geom::Pt, Dim> {
   }
 }; // access
 
-template<>
-struct make<geom::Pt> {
-  using point_type = geom::Pt;
+template<typename U>
+struct make<geom::Pt<U>> {
+  using point_type = geom::Pt<U>;
   static constexpr auto is_specialized = true;
-  static constexpr point_type apply(double x, double y)
+  static constexpr point_type apply(U x, U y)
     { return point_type{x, y}; }
 }; // make
 
@@ -193,19 +199,24 @@ struct make<geom::Pt> {
 
 namespace geom {
 
-constexpr Vec operator-(const Pt& lhs, const Pt& rhs) noexcept
-  { return Vec{lhs.x-rhs.x, lhs.y-rhs.y}; }
+template<typename U>
+constexpr Vec<U> operator-(const Pt<U>& lhs, const Pt<U>& rhs) noexcept
+  { return Vec<U>{lhs.x-rhs.x, lhs.y-rhs.y}; }
 
-constexpr Pt operator+(const Pt& p, const Vec& v) noexcept
-  { return Pt{p.x + v.dx, p.y + v.dy}; }
+template<typename U>
+constexpr Pt<U> operator+(const Pt<U>& p, const Vec<U>& v) noexcept
+  { return Pt<U>{p.x + v.dx, p.y + v.dy}; }
 
-constexpr Pt operator-(const Pt& p, const Vec& v) noexcept
-  { return Pt{p.x - v.dx, p.y - v.dy}; }
+template<typename U>
+constexpr Pt<U> operator-(const Pt<U>& p, const Vec<U>& v) noexcept
+  { return Pt<U>{p.x - v.dx, p.y - v.dy}; }
 
-constexpr double Dist(const Pt& a, const Pt& b) noexcept
+template<typename U>
+constexpr U Dist(const Pt<U>& a, const Pt<U>& b) noexcept
   { return (b - a).norm(); }
 
-constexpr double Dist2(const Pt& a, const Pt& b) noexcept
+template<typename U>
+constexpr SquaredTypeT<U> Dist2(const Pt<U>& a, const Pt<U>& b) noexcept
   { return (b - a).norm2(); }
 
 namespace test {

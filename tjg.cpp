@@ -1,22 +1,23 @@
-// inset_smooth_corners.cpp
-//
-// Read XY perimeter (meters), build an inward inset path, detect "real" corners
-// by simplifying the ORIGINAL perimeter (0.5 m DP), map those corners onto the
-// INSET ring, smooth BETWEEN those corners (endpoints anchored) with a heading
-// moving-average, and write:
-//   - <output.xy> : smoothed inset ring (CLOSED)
-//   - corners.xy  : corner points on the inset ring (for plotting)
-//   - deflect.txt : deflection angle (degrees) for each vertex of the
-//                   simplified-for-corners perimeter (one value per line)
-//
-// Usage:
-//   inset_bg <input.xy> <offset_m> <output.xy>
-//
-// Input:  one "x y" per line; not necessarily closed.
-// Output: one "x y" per line; CLOSED ring (last == first).
+/// @file
+/// @copyright 2025 Terry Golubiewski, all rights reserved.
+///
+/// Read XY perimeter (meters), build an inward inset path, detect "real" corners
+/// by simplifying the ORIGINAL perimeter (0.5 m DP), map those corners onto the
+/// INSET ring, smooth BETWEEN those corners (endpoints anchored) with a heading
+/// moving-average, and write:
+///   - <output.xy> : smoothed inset ring (CLOSED)
+///   - corners.xy  : corner points on the inset ring (for plotting)
+///   - deflect.txt : deflection angle (degrees) for each vertex of the
+///                   simplified-for-corners perimeter (one value per line)
+///
+/// Usage:
+///   inset_bg <input.xy> <offset_m> <output.xy>
+///
+/// Input:  one "x y" per line; not necessarily closed.
+/// Output: one "x y" per line; CLOSED ring (last == first).
 
 #include "Smooth.hpp"
-
+#include "Resample.hpp"
 #include "geom.hpp"
 
 #include <boost/geometry.hpp>
@@ -35,27 +36,34 @@ namespace gsl = gsl_lite;
 #include <optional>
 #include <stdexcept>
 #include <exception>
+#include <type_traits>
 #include <limits>
 #include <cmath>
 #include <cstdlib>
 
 template<typename T>
-void DbgOut(const char* str, const T& x) {
-  std::cerr << str << '=' << x << std::endl;
-}
+void DbgOut(const char* str, const T& x)
+  { std::cerr << str << '=' << x << std::endl; }
 
 #define DBG(x) DbgOut(BOOST_STRINGIZE(x), (x))
 
 namespace bg = boost::geometry;
 namespace fs = std::filesystem;
 
-using geom::Vec;
 using geom::Pi;
 using geom::TwoPi;
 using geom::DegPerRad;
 using geom::RadPerDeg;
 
-using Pt       = geom::Pt;
+using Meters = double;
+using Degrees = double;
+
+namespace geom {
+template<> struct SquaredType<Meters> { using type = double; };
+} // geom
+
+using Pt       = geom::Pt<Meters>;
+using Disp     = geom::Vec<Meters>;
 using Polygon  = bg::model::polygon<Pt>;
 using MP       = bg::model::multi_polygon<Polygon>;
 using Ring     = bg::model::ring<Pt>;
@@ -64,26 +72,36 @@ using CornerVec = std::vector<gsl::index>;
 
 namespace Tune {
 
-constexpr double MiterLimit   = 4.0;
-constexpr int    CirclePoints = 14;
+#if 0
+constexpr Meters MiterLimit   = 4.0;
+#endif
 
+constexpr int CirclePoints = 32;
+
+#if 0
 // Geometry cleanup (applied to geometry we will drive)
-constexpr double SimplifyInputTol    = 0.10; // m; <=0 → skip
-constexpr double SimplifyInsetTol    = 0.10; // m; <=0 → skip
-constexpr double SimplifySmoothedTol = 0.10; // try 0.10–0.30
-constexpr double SimplifyOutputTol   = 0.10; // try 0.10–0.30
+constexpr Meters SimplifyInputTol    = 0.10; // m; <=0 → skip
+constexpr Meters SimplifyInsetTol    = 0.10; // m; <=0 → skip
+constexpr Meters SimplifySmoothedTol = 0.10; // try 0.10–0.30
+#endif
+
+constexpr Meters SimplifyOutputTol   = 0.10; // try 0.10–0.30
 
 // Corner detection (on ORIGINAL perimeter via DP 0.5 m)
-constexpr double SimplifyForCorners = 10.0; // m; Douglas–Peucker for corner detection
-constexpr double CornerAngleDeg     = 45.0; // deflection threshold
-constexpr double MinSegLen          = 0.50; // m; ignore tiny edges near vertex
+constexpr Meters  SimplifyForCorners = 10.0; // m; Douglas–Peucker for corner detection
+constexpr Degrees CornerAngleDeg     = 45.0; // deflection threshold
+
+#if 0
+constexpr Meters  MinSegLen          = 0.50; // m; ignore tiny edges near vertex
 
 // Smoothing between mapped corner indices on the inset ring
-constexpr double ResampleStep       = 1.00; // m
+constexpr Meters ResampleStep       = 1.00; // m
+
 constexpr int    HeadingHalfWin     = 3;    // moving-average half-window (2*H+1)
 
 // Safety corridor (optional clamp). 0.0 disables.
-constexpr double CorridorShrink     = 0.0;  // m
+constexpr Meters CorridorShrink     = 0.0;  // m
+#endif
 
 } // Tune
 
@@ -95,18 +113,47 @@ std::ostream& operator<<(std::ostream& os, const Pt& p)
 std::istream& operator>>(std::istream& os, Pt& p)
   { return os >> p.x >> p.y; }
 
+#if 0
+void EnsureValid(const Ring& ring, bool isInner) {
+  auto failure = bg::validity_failure_type{};
+  if (bg::is_valid(ring, failure)) [[likely]] {
+    if (!isInner)
+      return;
+    failure = bg::failure_wrong_orientation;
+  }
+  else {
+    if (isInner && failure == bg::failure_wrong_orientation)
+      return;
+  }
+  auto msg = std::string{"Invalid ring: "};
+  msg += bg::validity_failure_type_message(failure);
+  throw std::runtime_error{msg};
+} // EnsureValid
+#endif
+
+template<class Geo>
+requires (!std::is_same_v<Geo, Ring>)
+void EnsureValid(const Geo& geo) {
+  auto failure = bg::validity_failure_type{};
+  if (bg::is_valid(geo, failure)) [[likely]]
+    return;
+  auto msg = std::string{"Invalid geometry: "};
+  msg += bg::validity_failure_type_message(failure);
+  throw std::runtime_error{msg};
+} // EnsureValid
+
+#if 0
 Ring EnsureClosed(const Ring& ring) {
   if (ring.empty() || ring.front() == ring.back()) return ring;
   auto out = ring;
   out.push_back(ring.front());
   return out;
 }
-
 std::vector<Pt> ReadPoints(const fs::path& path) {
-  auto in = std::ifstream{path};
+  auto in = std::ifstream{path, std::ios::binary};
   if (!in) throw std::runtime_error{"cannot open input: " + path.string()};
-  std::vector<Pt> pts;
-  Pt pt;
+  auto pts = std::vector<Pt>{};
+  auto pt = Pt{};
   while (in >> pt) pts.push_back(pt);
   if (pts.size() < 3)
     throw std::runtime_error{"not enough points in: " + path.string()};
@@ -115,59 +162,57 @@ std::vector<Pt> ReadPoints(const fs::path& path) {
 } // ReadPoints
 
 void WritePoints(const std::vector<Pt>& pts, const fs::path& path) {
-  auto out = std::ofstream{path};
+  auto out = std::ofstream{path, std::ios::binary};
   if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
   out << std::fixed << std::setprecision(2);
   for (const auto& p : pts) out << p << '\n';
   out.close();
 } // WritePoints
+#endif
 
 Polygon ReadPolygon(const fs::path& path) {
-  auto in = std::ifstream{path};
+  auto in = std::ifstream{path, std::ios::binary};
   if (!in) throw std::runtime_error{"cannot open input: " + path.string()};
   auto poly = Polygon{};
   auto* ring = &poly.outer();
-  int count = 0;
-  int inner = 0;
-  std::vector<Pt> pts;
+  auto pts = std::vector<Pt>{};
   auto line = std::string{};
-  Pt pt;
+  auto pt = Pt{};
   while (getline(in, line)) {
     if (line.empty())
       continue;
     if (line != "# inner") {
-      std::istringstream iss{line};
+      auto iss = std::istringstream{line};
       iss >> pt;
       ring->push_back(pt);
-      ++count;
       continue;
     }
     // Start a new inner ring.
     poly.inners().emplace_back();
     ring = &poly.inners().back();
-    ++inner;
   }
-  bg::correct(poly);
   in.close();
+  bg::correct(poly);
+  EnsureValid(poly);
   return poly;
 } // ReadPolygon
 
 void WritePolygon(const Polygon& poly, const fs::path& path) {
-  auto out = std::ofstream{path};
+  auto out = std::ofstream{path, std::ios::binary};
   if (!out) throw std::runtime_error{"cannot open output: " + path.string()};
   out << std::fixed << std::setprecision(2);
   for (const auto& p : poly.outer()) out << p << '\n';
   out.close();
   if (poly.inners().empty())
     return;
-  auto ext  = path.extension();
-  int inner = 0;
+  auto ext   = path.extension();
+  auto inner = 0;
   for (const auto& v : poly.inners()) {
     auto path2 = path;
-    auto ext2 = fs::path{std::to_string(++inner)};
+    auto ext2  = fs::path{std::to_string(++inner)};
     ext2 += ext;
     path2.replace_extension(ext2);
-    out = std::ofstream{path2};
+    out = std::ofstream{path2, std::ios::binary};
     if (!out)
       throw std::runtime_error{"cannot open output: " + path2.string()};
     out << std::fixed << std::setprecision(2);
@@ -182,7 +227,7 @@ void WriteMP(const MP& mp, const fs::path& path) {
     return;
   }
   auto ext = path.extension();
-  int num = 0;
+  auto num = 0;
   for (const auto& p : mp) {
     auto path2 = path.stem();
     path2 += std::to_string(++num);
@@ -191,49 +236,45 @@ void WriteMP(const MP& mp, const fs::path& path) {
   }
 } // WriteMP
 
+#if 0
 // Build polygon from (possibly open) points
 Polygon MakePolygon(std::vector<Pt> pts) {
   auto ring = Ring{pts.begin(), pts.end()};
   auto poly = Polygon{ring};
   bg::correct(poly);
-  gsl_Expects(poly.outer().front() == poly.outer().back());
+  EnsureValid(poly);
   return poly;
 }
+#endif
 
-void WriteDeflections(std::ostream& out, const Ring& ring, double& dist) {
-  gsl_Expects(ring.size() >= 3 && ring.front() == ring.back());
+void WriteDeflections(std::ostream& out, const Ring& ring) {
+  const auto deflections = MakeDeflections(ring, Meters{1});
   out << std::fixed << std::setprecision(2);
-  auto n = std::ssize(ring) - 1;
-  auto curr = ring[0] - ring[n-1];
-  for (auto i = gsl::index{0}; i != n; ++i) {
-    auto prev = curr;
-    curr = ring[i+1] - ring[i];
-    auto deg  = ToDegrees(curr.angle_wrt(prev));
-    out << ring[i] << ' ' << dist << ' ' << deg << '\n';
-    dist += curr.norm();
-  }
+  for (auto d: deflections)
+    out << ToDegrees(d) << '\n';
 } // WriteDeflections
 
-void WriteDeflections(std::ostream& out, const Polygon& poly, double& dist) {
-  WriteDeflections(out, poly.outer(), dist);
+void WriteDeflections(std::ostream& out, const Polygon& poly) {
+  WriteDeflections(out, poly.outer());
   for (const auto& r: poly.inners())
-    WriteDeflections(out, r, dist);
+    WriteDeflections(out, r);
 } // WriteDeflections
 
-void WriteDeflections(std::ostream& out, const MP& mp, double& dist) {
+void WriteDeflections(std::ostream& out, const MP& mp) {
   for (const auto& poly: mp)
-    WriteDeflections(out, poly, dist);
+    WriteDeflections(out, poly);
 }
 
 template<class Geo>
 void WriteDeflections(const Geo& geo, const fs::path& path = "deflect.txt") {
-  auto out = std::ofstream{path};
+  EnsureValid(geo);
+  auto out = std::ofstream{path, std::ios::binary};
   if (!out)
     throw std::runtime_error{"cannot open deflection file: " + path.string()};
-  auto dist = 0.0;
-  WriteDeflections(out, geo, dist);
+  out.exceptions(std::ios::failbit|std::ios::badbit);
+  WriteDeflections(out, geo);
   out.close();
-}
+} // WriteDeflections (Geo)
 
 void WriteCorners(std::ostream& out, const Ring& ring, const CornerVec& corners)
 {
@@ -243,21 +284,23 @@ void WriteCorners(std::ostream& out, const Ring& ring, const CornerVec& corners)
   }
 } // WriteCorners
 
+#if 0
 void WriteCorners(const Ring& ring, const CornerVec& corners,
                   const fs::path& path = "corners.xy")
 {
-  auto out = std::ofstream{path};
+  auto out = std::ofstream{path, std::ios::binary};
   if (!out)
     throw std::runtime_error{"cannot open corners file: " + path.string()};
   out << std::fixed << std::setprecision(2);
   WriteCorners(out, ring, corners);
   out.close();
 } // WriteCorners
+#endif
 
 void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
                   const fs::path& path = "corners.xy")
 {
-  auto out = std::ofstream{path};
+  auto out = std::ofstream{path, std::ios::binary};
   if (!out)
     throw std::runtime_error{"cannot open corners file: " + path.string()};
   out << std::fixed << std::setprecision(2);
@@ -269,6 +312,7 @@ void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
 } // WriteCorners
 
 CornerVec FindCornersSimp(const Ring& ring) {
+  gsl_Expects(ring.size() >= 3);
   gsl_Expects(ring.front() == ring.back());
   auto corners = CornerVec{};
   const auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
@@ -280,10 +324,6 @@ CornerVec FindCornersSimp(const Ring& ring) {
     auto th  = curr.angle_wrt(prev);
     if (std::abs(th.value()) >= Theta) corners.push_back(i);
   }
-  using namespace std;
-  cout << corners.size() << " corners found at:\n";
-  for (auto i: corners)
-    cout << setw(3) << i << '\t' << ring[i] << '\n';
   return corners;
 } // FindCornersSimp
 
@@ -304,7 +344,7 @@ CornerVec MapCornersToOriginal(const Ring& orig, const Ring& simp,
 
     // scan forward around the ring once
     const auto n = std::ssize(orig) - 1;
-    for (auto i = i0+1; i < n; ++i) {
+    for (auto i = i0+1; i != n; ++i) {
       const auto d2 = Dist2(orig[i], corner);
       if (d2 < best_d2) { best_d2 = d2; best_i = i; }
     }
@@ -317,22 +357,37 @@ CornerVec MapCornersToOriginal(const Ring& orig, const Ring& simp,
   return out;
 } // MapCornersToOriginal
 
-CornerVec FindCorners(const Ring& ring) {
-  auto simp = Ring{};
-  bg::simplify(ring, simp, Tune::SimplifyForCorners);
+template<class Geo>
+auto Simplify(const Geo& geo, Meters tolerance = Meters{1}) -> Geo {
+  gsl_Expects(tolerance >= Meters{0.01});
+  auto simp = Geo{};
+  auto failure = bg::validity_failure_type{};
+  while (tolerance >= Meters{0.01}) {
+    bg::simplify(geo, simp, tolerance);
+    if (bg::is_valid(simp, failure) || failure == bg::failure_wrong_orientation)
+      return simp;
+    if (failure != bg::failure_self_intersections) {
+      auto msg = std::string{"Simplify: invalid result: "};
+      msg += bg::validity_failure_type_message(failure);
+      throw std::runtime_error{msg};
+    }
+    tolerance /= 2;
+    std::cerr
+          << "Simplify failed, retrying with tolerance = " << tolerance << '\n';
+    simp.clear();
+  }
+  std::cerr << "Simplify failed: using original geo.\n";
+  return geo;
+} // Simplify
 
+auto FindCorners(const Ring& ring) -> CornerVec {
+  auto simp = Simplify(ring, Tune::SimplifyForCorners);
   auto simp_corners = FindCornersSimp(simp);
-  auto corners =  MapCornersToOriginal(ring, simp, simp_corners);
-  using namespace std;
-  cout << corners.size() << " corners found at:\n";
-  for (auto i: corners)
-    cout << setw(3) << i << '\t' << ring[i] << '\n';
+  auto corners = MapCornersToOriginal(ring, simp, simp_corners);
   return corners;
 } // FindCorners
 
 void AdjustCorners(Ring& ring, CornerVec& corners) {
-  gsl_Expects(ring.size() >= 3);
-  gsl_Expects(ring.front() == ring.back());
   ring.pop_back();
   if (corners.empty())
     corners.push_back(0);
@@ -341,7 +396,6 @@ void AdjustCorners(Ring& ring, CornerVec& corners) {
     auto shift1 = corners.front();
     auto shift2 = corners.back() - std::ssize(ring);
     auto mid = (shift1 < -shift2) ? shift1 : shift2;
-    std::cout << "Rotating corners: " << mid << '\n';
     if (mid >= 0) {
       for(auto& c: corners)
         c -= mid;
@@ -356,7 +410,6 @@ void AdjustCorners(Ring& ring, CornerVec& corners) {
     }
   }
   if (corners.size() < 2) {
-    std::cout << "Adding distant corner: ";
     // If there's only one corner, add another at the most distant point.
     const auto begin = ring.begin();
     const auto end   = ring.end();
@@ -371,32 +424,39 @@ void AdjustCorners(Ring& ring, CornerVec& corners) {
       farthest_d = d;
     }
     auto idx = std::distance(begin, farthest_p);
-    std::cout << idx << ' ' << *farthest_p << '\n';
     corners.push_back(idx);
   }
   ring.push_back(ring.front()); // close ring
 } // AdjustCorners
 
-MP ComputeInset(const Polygon& in, double offset) {
-    // ---- Inset buffer (negative distance) ----
-    auto distance = bg::strategy::buffer::distance_symmetric<double>{-offset};
-    auto side     = bg::strategy::buffer::side_straight{};
-    auto join_m   = bg::strategy::buffer::join_miter{Tune::MiterLimit};
-    auto end      = bg::strategy::buffer::end_flat{};
-    auto circle   = bg::strategy::buffer::point_circle{Tune::CirclePoints};
+MP ComputeInset(const Polygon& in, Meters offset) {
+  EnsureValid(in);
+  gsl_Expects(offset >= Meters{1});
 
-    auto inset = MP{};
-    bg::buffer(in, inset, distance, side, join_m, end, circle);
-    std::cout << "Inset generated " << inset.size() << " polygons.\n";
-    return inset;
+  // ---- Inset buffer (negative distance) ----
+  auto distance = bg::strategy::buffer::distance_symmetric<Meters>{-offset};
+  auto side     = bg::strategy::buffer::side_straight{};
+  //  auto join     = bg::strategy::buffer::join_miter{}; // {Tune::MiterLimit};
+  auto join     = bg::strategy::buffer::join_round{Tune::CirclePoints};
+  //  auto end      = bg::strategy::buffer::end_flat{};
+  auto end      = bg::strategy::buffer::end_round{Tune::CirclePoints};
+  auto point    = bg::strategy::buffer::point_circle{Tune::CirclePoints};
+  //  auto point    = bg::strategy::buffer::point_square{};
+
+  auto inset = MP{};
+  bg::buffer(in, inset, distance, side, join, end, point);
+  EnsureValid(inset);
+  std::cout << "Inset generated " << inset.size() << " polygons.\n";
+  return inset;
 #if 0
-    const Polygon& inset_poly0 = BiggestByArea(inset_mp);
-    Polygon inset_poly = inset_poly0;
+  const Polygon& inset_poly0 = BiggestByArea(inset_mp);
+  Polygon inset_poly = inset_poly0;
 #endif
 } // ComputeInset
 
 } // anonymous
 
+#if 0
 Ring Smooth(Ring ring) {
   auto corners = FindCorners(ring);
   AdjustCorners(ring, corners);
@@ -421,6 +481,7 @@ void Smooth(MP& mp) {
   for (auto& p: mp)
     Smooth(p);
 } // Smooth multi-polygon
+#endif
 
 int main(int argc, const char* argv[]) {
   try {
@@ -433,19 +494,16 @@ int main(int argc, const char* argv[]) {
     }
 
     const auto in_path  = fs::path{argv[1]};
-    const auto offset   = std::stod(argv[2]); // inward distance (m)
+    const auto offset   = Meters{std::stod(argv[2])}; // inward distance (m)
     const auto out_path = fs::path{argv[3]};
 
-    if (offset <= 0.0) throw std::runtime_error{"<offset_m> must be > 0"};
+    if (offset <= Meters{0}) throw std::runtime_error{"<offset_m> must be > 0"};
 
     // ---- Read ORIGINAL perimeter and build polygon
     auto poly_in = ReadPolygon(in_path);
 
-    auto reason = std::string{};
-    if (!bg::is_valid(poly_in, reason)) {
-      std::cerr << "Invalid polygon: " << reason << '\n';
-      return EXIT_FAILURE;
-    }
+    EnsureValid(poly_in);
+
     std::cerr << "Polygon is valid\n";
 
     auto allCorners = std::vector<CornerVec>{};
@@ -462,13 +520,10 @@ int main(int argc, const char* argv[]) {
     WriteCorners(poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
-    WriteDeflections(inset, "deflect0.txt");
+    auto mp_out = Simplify(inset, Tune::SimplifyOutputTol);
 
-    auto mp_out = MP{};
-    bg::simplify(inset, mp_out, Tune::SimplifyOutputTol);
+    // Smooth(mp_out);
 
-    Smooth(mp_out);
-    DBG((mp_out.size()));
     WriteDeflections(mp_out, "deflect.txt");
     WriteMP(mp_out, out_path);
 

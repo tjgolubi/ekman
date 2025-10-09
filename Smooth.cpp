@@ -29,31 +29,32 @@ namespace gsl = gsl_lite;
 
 namespace bg = boost::geometry;
 
-using geom::Pt;
-using geom::Vec;
 using geom::Radians;
 
+using Meters     = double;
+using Pt         = geom::Pt<Meters>;
+using Disp       = geom::Vec<Meters>;
 using Ring       = bg::model::ring<Pt>;
 using Linestring = bg::model::linestring<Pt>;
 
 // ----------------------- Tunables -----------------------------------
 namespace Tune {
   // Resampling step (m). Typical: 0.2–0.5
-  constexpr double ResampleDs              = 0.50;
+  constexpr Meters ResampleDs  = 0.50;
 
   // Post-smoothing DP tolerance (m). Typical: 0.05–0.15
-  constexpr double SimplifyTol             = 0.10;
+  constexpr Meters SimplifyTol = 0.10;
 
   // Predicate to decide "dense" arcs to smooth
-  constexpr int         MinPtsForSmooth    = 8;
-  constexpr double      MaxMeanSpacingForSmooth = 0.75;  // m
-  constexpr double      MaxEdgeForSmooth        = 3.00;  // m
+  constexpr int    MinPtsForSmooth = 8;
+  constexpr Meters MaxMeanSpacingForSmooth = 0.75;  // m
+  constexpr Meters MaxEdgeForSmooth        = 3.00;  // m
 
   // Deviation smoothing: moving-average window half-size
   constexpr int HeadingHalfWin             = 3;          // total window = 2*H+1
 
   // Safety: per-step lateral deviation limit (meters)
-  constexpr double LateralTol              = 0.10;
+  constexpr Meters LateralTol              = 0.10;
 } // Tune
 
 // ----------------------- Helpers ------------------------------------
@@ -82,52 +83,52 @@ Linestring ExtractArc(const Ring& r, gsl::index start, gsl::index stop) {
   return line; // OPEN arc [start..stop]
 }
 
-double MaxSegmentLen(const Linestring& ls) {
+Meters MaxSegmentLen(const Linestring& ls) {
   if (std::ssize(ls) < 2) return 0.0;
-  double m = 0.0;
-  for (gsl::index i = 1; i < std::ssize(ls); ++i)
+  auto m = Meters{0.0};
+  for (gsl::index i = 1; i != std::ssize(ls); ++i)
     m = std::max(m, geom::Dist(ls[i-1], ls[i]));
   return m;
 }
 
-double TotalLen(const Linestring& ls) {
-  if (std::ssize(ls) < 2) return 0.0;
-  double L = 0.0;
-  for (gsl::index i = 1; i < std::ssize(ls); ++i)
-    L += geom::Dist(ls[i-1], ls[i]);
-  return L;
+Meters TotalLen(const Linestring& ls) {
+  if (std::ssize(ls) < 2) return Meters{0};
+  auto len = Meters{0};
+  for (gsl::index i = 1; i != std::ssize(ls); ++i)
+    len += geom::Dist(ls[i-1], ls[i]);
+  return len;
 }
 
 bool ShouldSmooth(const Linestring& arc) {
   // Dense-only smoothing predicate
   if (std::ssize(arc) < Tune::MinPtsForSmooth) return false;
 
-  const double len  = TotalLen(arc);
-  if (len <= 0.0) return false;
+  const auto len  = TotalLen(arc);
+  if (len <= Meters{0}) return false;
 
-  const double mean = len / static_cast<double>(std::ssize(arc) - 1);
+  const auto mean = len / (std::ssize(arc) - 1);
   if (mean > Tune::MaxMeanSpacingForSmooth) return false;
 
   if (MaxSegmentLen(arc) > Tune::MaxEdgeForSmooth) return false;
 
   return true;
-}
+} // ShouldSmooth
 
 std::vector<Radians> MovingAverage(const std::vector<Radians>& v, int half_win) {
   if (half_win <= 0) return v;
-  const int W = 2 * half_win + 1;
-  const int n = static_cast<int>(v.size());
+  const auto w = 2 * half_win + 1;
+  const auto n = static_cast<int>(std::ssize(v));
   std::vector<Radians> out; out.reserve(n);
-  for (int i = 0; i < n; ++i) {
-    Radians s{0.0};
+  for (int i = 0; i != n; ++i) {
+    auto s = Radians{0};
     for (int k = -half_win; k <= half_win; ++k) {
-      int j = std::clamp(i + k, 0, n - 1);
+      auto j = std::clamp(i + k, 0, n - 1);
       s += v[j];
     }
-    out.push_back(s / static_cast<double>(W));
+    out.push_back(s/w);
   }
   return out;
-}
+} // MovingAverage
 
 } // local
 
@@ -141,56 +142,57 @@ Linestring Smooth(const Ring& ring, gsl::index start, gsl::index stop) {
 
   // 2) If not dense, just DP-simplify lightly and return
   if (!ShouldSmooth(arc)) {
-    Linestring sparse;
+    auto sparse = Linestring{};
     bg::simplify(arc, sparse, Tune::SimplifyTol);
     return (std::ssize(sparse) >= 2) ? sparse : arc;
   }
 
   // 3) Cumulative arclength on arc
-  std::vector<double> S; S.reserve(arc.size());
-  S.push_back(0.0);
-  for (gsl::index i = 1; i < std::ssize(arc); ++i)
+  std::vector<Meters> S; S.reserve(arc.size());
+  S.push_back(Meters{0});
+  for (gsl::index i = 1; i != std::ssize(arc); ++i)
     S.push_back(S.back() + geom::Dist(arc[i-1], arc[i]));
-  const double total = S.back();
-  if (total <= 0.0) return arc;
+  const auto total = S.back();
+  if (total <= Meters{0}) return arc;
 
   // 4) Uniform resample to step ≈ ResampleDs → r (OPEN)
-  std::vector<Pt> r;
-  const int N = std::max<int>(2, static_cast<int>(std::floor(total / Tune::ResampleDs)) + 1);
-  r.reserve(N);
+  const auto N =
+    std::max<int>(2, static_cast<int>(std::floor(total/Tune::ResampleDs)) + 1);
+  auto r = std::vector<Pt>{}; r.reserve(N);
   r.emplace_back(arc.front());
-  gsl::index seg = 0;
-  for (int k = 1; k < N - 1; ++k) {
-    const double sk = k * (total / (N - 1));
-    while (seg + 1 < std::ssize(S) && S[seg + 1] < sk) ++seg;
-    const double s0 = S[seg], s1 = S[seg + 1];
-    const double t  = (s1 > s0) ? (sk - s0) / (s1 - s0) : 0.0;
-    r.emplace_back(Lerp(arc[seg], arc[seg + 1], t));
+  auto seg = gsl::index{0};
+  for (int k = 1; k != N - 1; ++k) {
+    const auto sk = k * (total / (N-1));
+    while (seg + 1 < std::ssize(S) && S[seg+1] < sk) ++seg;
+    const auto s0 = S[seg];
+    const auto s1 = S[seg+1];
+    const auto t  = (s1 > s0) ? (sk - s0) / (s1 - s0) : 0.0;
+    r.emplace_back(Lerp(arc[seg], arc[seg+1], t));
   }
   r.emplace_back(arc.back());
 
   // Constants
-  const double ds = total / (N - 1);         // uniform step
-  const auto theta_max = geom::asin(std::clamp(Tune::LateralTol / ds, 0.0, 1.0));
+  const auto ds = total / (N-1);         // uniform step
+  const auto theta_max = geom::asin(std::clamp(Tune::LateralTol/ds, 0.0, 1.0));
 
   // 5) Base step headings h[i] for each segment (N-1)
-  std::vector<Radians> h; h.reserve(N - 1);
-  for (int i = 0; i < N - 1; ++i) {
-    const Vec v = r[i + 1] - r[i];
+  auto h = std::vector<Radians>{}; h.reserve(N-1);
+  for (int i = 0; i != N-1; ++i) {
+    const auto v = r[i+1] - r[i];
     h.push_back(v.angle());
   }
 
   // 6) Local reference tangents (centered) and small deviation angles alpha[i]
-  auto ref_tangent = [&](int i) -> Vec {
-    if (i == 0)     return r[1]     - r[0];
-    if (i == N - 2) return r[N - 1] - r[N - 2];
-    return (r[i + 1] - r[i - 1]);   // centered difference, not normalized
+  auto ref_tangent = [&](int i) -> Disp {
+    if (i == 0)     return r[1] - r[0];
+    if (i == N - 2) return r[N-1] - r[N-2];
+    return (r[i+1] - r[i-1]);   // centered difference, not normalized
   };
 
   std::vector<Radians> alpha; alpha.reserve(N - 1);
   for (int i = 0; i < N - 1; ++i) {
-    const Vec v = r[i + 1] - r[i];
-    const Vec u = ref_tangent(i);
+    const auto v = r[i+1] - r[i];
+    const auto u = ref_tangent(i);
     alpha.push_back(v.angle_wrt(u));        // small signed deviation
   }
 
@@ -202,20 +204,20 @@ Linestring Smooth(const Ring& ring, gsl::index start, gsl::index stop) {
     a = std::clamp(a, -theta_max, +theta_max);
 
   // 9) New headings h' = h + alpha_s
-  std::vector<Radians> hprime; hprime.reserve(N - 1);
-  for (int i = 0; i < N - 1; ++i) hprime.push_back(h[i] + alpha_s[i]);
+  auto hprime = std::vector<Radians>{}; hprime.reserve(N-1);
+  for (int i = 0; i != N-1; ++i) hprime.push_back(h[i] + alpha_s[i]);
 
   // 10) Reconstruct positions by integrating h' at constant step
-  Linestring smooth; smooth.resize(N);
+  auto smooth = Linestring{}; smooth.resize(N);
   smooth[0] = r[0];
-  for (int i = 1; i < N; ++i)
-    smooth[i] = smooth[i - 1] + Vec{ds, hprime[i - 1]};  // polar Vec(len, angle)
+  for (int i = 1; i != N; ++i)
+    smooth[i] = smooth[i-1] + Disp{ds, hprime[i-1]};  // polar Disp(len, angle)
   // Pin exact endpoint
   smooth.back() = r.back();
 
   // 11) Optional DP simplify (keeps endpoints)
-  if (Tune::SimplifyTol > 0.0 && std::ssize(smooth) > 2) {
-    Linestring out;
+  if (Tune::SimplifyTol > Meters{0} && std::ssize(smooth) > 2) {
+    auto out = Linestring{};
     bg::simplify(smooth, out, Tune::SimplifyTol);
     if (std::ssize(out) >= 2) return out;
   }

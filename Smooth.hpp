@@ -13,6 +13,6 @@
 #include <boost/geometry.hpp>
 #include <gsl-lite/gsl-lite.hpp>
 
-boost::geometry::model::linestring<geom::Pt>
-Smooth(const boost::geometry::model::ring<geom::Pt>& r,
+boost::geometry::model::linestring<geom::Pt<double>>
+Smooth(const boost::geometry::model::ring<geom::Pt<double>>& r,
        gsl_lite::index start, gsl_lite::index stop);
