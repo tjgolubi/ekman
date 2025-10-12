@@ -1,0 +1,224 @@
+ASP: AllocationStamp
+  PTN: Position {0:2}
+  A: Start            dateTime    required
+  B: Stop             dateTime
+  C: Duration         uint32_t
+  D: Type                         required
+    1: Planned
+    4: Effective (Realized)
+
+BSN: BaseStation
+  A: BaseStationId    "(BSN|BSN-)[0-9]+" required
+  B: BaseStationDesignator ".{0:32}"     required
+  C: BaseStationNorth "[-90.0, 90.0]"    required
+  D: BaseStationEast  "[-180.0, 180.0]"  required
+  E: BaseStationUp    "int32_t"          required
+
+CTR: Customer
+  A: CustomerId         "(CTR|CTR-)[0-9]+" required
+  B: CustomerLastName   ".{0:32}"          required
+  C: CustomerFirstName  ".{0:32}"
+  D: CustomerStreet     ".{0:32}"
+  E: CustomerPOBox      ".{0:32}"
+  F: CustomerPostalCode ".{0:10}"
+  G: CustomerCity       ".{0:32}"
+  H: CustomerState      ".{0:32}"
+  I: CustomerCountry    ".{0:32}"
+  J: CustomerPhone      ".{0:20}"
+  K: CustomerMobile     ".{0:20}"
+  L: CustomerFax        ".{0:20}"
+  M: CustomerEmail      ".{0:64}"
+
+FRM: Farm
+  A: FarmId             "(FRM|FRM-)[0-9]+" required
+  B: FarmDesignator     ".{0:32}"          required
+  C: FarmStreet         ".{0:32}"
+  D: FarmPOBox          ".{0:32}"
+  E: FarmPostalCode     ".{0:10}"
+  F: FarmCity           ".{0:32}"
+  G: FarmState          ".{0:32}"
+  H: FarmCountry        ".{0:32}"
+  I: CustomerIdRef      "(CTR|CTR-)[0-9]+"
+
+GRD: Grid
+  A: GridMinimumNorthPosition "(-90..90).9"   required
+  B: GridMinimumEastPosition  "(-180..180).9" required
+  C: GridCellNorthSize        "0.0..1.0"      required
+  D: GridCellEastSize         "0.0..1.0"      required
+  E: GridMaximumColumn        "uint32_t"      required
+  F: GridMaximumRow           "uint32_t"      required
+  G: Filename                 "GRD[0-9]{5}"   required
+  H: Filelength               "uint32_t"
+  I: GridType                 "uint32_t"      required
+    1: grid type 1
+    2: grid type 2
+  J: TreatmentZoneCode        "uint8_t"
+
+GAN: GuidanceAllocation
+  ASP: AllocationStamp        +
+  GST: GuidanceShift          *
+  A: GuidanceGroupIdRef       "(GGP|GGP-)[0-9]+" required
+
+GGP: GuidanceGroup
+  GPN: GuidancePattern        *
+  PLN: BoundaryPolygon        *
+  A: GuidanceGroupId          "(GGP|GGP-)[0-9]+" required
+  B: GuidanceGroupDesignator  ".{0:32}"
+
+GPN: GuidancePattern
+  LSG: LineString             1
+  PLN: BoundaryPolygon        *
+  A: GuidancePatternId        "(GPN|GPN-)[0-9]+" required
+  B: GuidancePatternDesignator".{0:32}"
+  C: GuidancePatternType                         required
+    1: AB
+    2: A+
+    3: Curve
+    4: Pivot
+    5: Spiral
+  D: GuidancePatternOptions
+    1: Clockwise - for pivot
+    2: Counter-clockwise - for pivot
+    3: Full Circle - for pivot
+  E: GuidancePatternPropagationDirection
+    1: Both directions
+    2: Left direction only
+    3: Right direction only
+    4: No propagation
+  F: GuidancePatternExtension
+    1: From both first and last point
+    2: From first point (A) only
+    3: From last point (B) only
+    4: No extensions
+  G: GuidancePatternHeading   "0.0..360.0"
+  H: GuidancePatternRadius    "uint32_t"
+  I: GuidancePatternGNSSMethod
+    0: no GPS fix
+    1: GNSS fix
+    2: DGNSS fix
+    3: Precise GNSS
+    4: RTK fixed integer
+    5: RTK float
+    6: Est (DR) mode
+    7: Manual input
+    8: Simulate mode
+   16: Desktop generated data
+   17: Other
+  J: GuidancePatternHorizontalAccuracy "[0.0, 65.0]"
+  K: GuidancePatternVerticalAccuracy   "[0.0, 65.0]"
+  L: BaseStationRef           "(BSN|BSN-)[0-9]+"
+  M: OriginSRID               ".{0:32}"
+  N: NumberOfSwathsLeft       "uint32_t"
+  O: NumberOfSwathsRight      "uint32_t"
+
+GST: GuidanceShift
+  AST: AllocationStamp        *
+  A: GuidanceGroupIdRef       "(GGP|GGP-)[0-9]+
+  B: GuidancePatternIdRef     "(GPN|GPN-)[0-9]+"
+  C: GuidanceEastShift        int32_t
+  D: GuidanceNorthShift       int32_t
+  E: PropagationOffset        int32_t
+
+LSG: LineString               +
+  PNT: Point                  +
+  A: LineStringTypea                             required
+    1: PolygonExterior
+    2: PolygonInterior
+    3: TramLine
+    4: SamplingRoute
+    5: GuidancePattern
+    6: Drainage
+    7: Fence
+    8: Flag
+    9: Obstacle
+  B: LineStringDesignator ".{0:32}"
+  C: LineStringWidth      uint32_t
+  D: LineStringLength     uint32_t
+  E: LineStringColour     uint8_t
+  F: LineStringId         "(LSG|LSG-)[0-9]+"
+
+PFD: Partfield
+  PLN: Polygon, non Treatment Zone only *
+  LSG: LineString         *
+  PNT: Point              *
+  GGP: GuidanceGroup      *
+  A: PartfieldId         "(PFD|PFD-)[0-9]+" required
+  B: PartfieldCode       ".{0:32}"
+  C: PartfieldDesignator ".{0:32}"          required
+  D: PartfieldArea       uint32_t           required
+  E: CustomerIdRef       "(CTR|CTR-)[0-9]+"
+  F: FarmIdRef           "(FRM|FRM-)[0-9]+"
+  G: CropTypeIdRef       "(CTP|CTP-)[0-9]+"
+  H: CropVarietyIdRef    "(CVT|CVT-)[0-9]+"
+  I: FieldIdRef          "(PFD|PFD-)[0-9]+"
+
+PNT: Point
+  A: PointType                            required
+    1: Flag
+    2: other
+    3: Field Access
+    4: Storage
+    5: Obstacle
+    6: Guidance Reference A
+    7: Guidance Reference B
+    8: Guidance Reference Center
+    9: Guidance Point
+   10: Partfield Reference Point
+   11: Homebase
+  B: PointDesignator     ".{0.32}"
+  C: PointNorth          [ -90.0,  90.0]  required
+  D: PointEast           [-180.0, 180.0]  required
+  E: PointUp             int32_t
+  F: PointColour         uint8_t
+  G: PointId             "(PNT|PNT-)[0-9]+"
+  H: PointHorizontalAccuracy [0.0, 65.0]
+  I: PointVerticalAccuracy   [0.0, 65.0]
+  J: Filename            "PNT[0-9]{5}"
+  K: Filelength          uint32_t
+
+PLN: Polygon
+  LSG: LineString        *
+  A: PolygonType                        required
+    1: Partfield Boundary
+    2: TreatmentZone
+    3: WaterSurface
+    4: Building
+    5: Road
+    6: Obstacle
+    7: Flag
+    8: Other
+    9: Mainfield
+   10: Headland
+   11: BufferZone
+   12: Windbreak
+  B: PolygonDesignator ".{0:32"
+  C: PolygonArea       uint32_t
+  D: PolygonColour     uint8_t
+  E: PolygonId         "(PLN|PLN-)[0-9]+"
+
+PTN: Position
+  A: PositionNorth     [ -90.0,  90.0]   required
+  B: PositionEast      [-180.0, 180.0]   required
+  C: PositionUp        int32_t
+  D: PositionStatus                      required
+    0: no GPS fix
+    1: GNSS fix
+    2: DGNSS fix
+    3: Precise GNSS
+    4: RTK fixed integer
+    5: RTK float
+    6: Est (DR) mode
+    7: Manual input
+    8: Simulate mode
+    9: Reserved
+   10: Reserved
+   11: Reserved
+   12: Reserved
+   13: Reserved
+   14: Error
+   15: PositionStatus value is not available
+  E: PDOP                   [0.0, 99.9]
+  F: HDOP                   [0.0, 99.9]
+  G: NumberOfSatellites     uint8_t
+  H: GpsUtcTime             uint32_t
+  I: GpsUtcDate             uint16_t
