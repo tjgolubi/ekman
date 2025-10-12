@@ -5,3 +5,10 @@ inset_bg
 save
 save2
 zip
+corners*.txt
+deflect*.txt
+obj_gcc/
+obj_clang/
+png/
+xy/
+tjg/

@@ -366,10 +366,15 @@ auto Simplify(const Geo& geo, Meters tolerance = Meters{1}) -> Geo {
     bg::simplify(geo, simp, tolerance);
     if (bg::is_valid(simp, failure) || failure == bg::failure_wrong_orientation)
       return simp;
-    if (failure != bg::failure_self_intersections) {
-      auto msg = std::string{"Simplify: invalid result: "};
-      msg += bg::validity_failure_type_message(failure);
-      throw std::runtime_error{msg};
+    switch (failure) {
+      case bg::failure_self_intersections:
+      case bg::failure_few_points:
+        break;
+      default: {
+        auto msg = std::string{"Simplify: invalid result: "};
+        msg += bg::validity_failure_type_message(failure);
+        throw std::runtime_error{msg};
+      }
     }
     tolerance /= 2;
     std::cerr
@@ -501,10 +506,6 @@ int main(int argc, const char* argv[]) {
 
     // ---- Read ORIGINAL perimeter and build polygon
     auto poly_in = ReadPolygon(in_path);
-
-    EnsureValid(poly_in);
-
-    std::cerr << "Polygon is valid\n";
 
     auto allCorners = std::vector<CornerVec>{};
     {
