@@ -435,12 +435,9 @@ auto LoadTaskData(const fs::path& xml_path) -> TaskData {
   for (auto ctr : root.children("CTR")) {
     auto cust = Customer{ctr};
     auto id   = cust.id;
-    out.customers[id] = std::move(cust);
-#if 0
     auto r = out.customers.try_emplace(id, std::move(cust));
     if (!r.second)
       InvalidNode(ctr, "Invalid (duplicate?) customer: " + id);
-#endif
   }
 
   // --- Farms (FRM) ---
@@ -451,12 +448,9 @@ auto LoadTaskData(const fs::path& xml_path) -> TaskData {
         InvalidNode(frm, "Farm has invalid customer id: " + farm.custId);
     }
     auto id = farm.id;
-    out.farms[id] = std::move(farm);
-#if 0
     auto r = out.farms.try_emplace(id, std::move(farm));
     if (!r.second)
       InvalidNode(frm, "Invalid (duplicate?) farm: " + id);
-#endif
   }
 
   // --- Fields (PFD) + Plans + LineStringGroups ---
@@ -468,12 +462,9 @@ auto LoadTaskData(const fs::path& xml_path) -> TaskData {
       InvalidNode(pfd, "Field has invalid farm id: " + field.farmId);
 
     auto id = field.id;
-    out.fields[id] = std::move(field);
-#if 0
-    auto r = out.fields.try_emplace(field.id, field);
+    auto r = out.fields.try_emplace(id, std::move(field));
     if (!r.second)
-      InvalidNode(pfd, "Invalid (duplicate?) field: " + field.id);
-#endif
+      InvalidNode(pfd, "Invalid (duplicate?) field: " + id);
   }
 
   // Optional: basic referential checks (don’t hard-fail; just warn)
