@@ -154,8 +154,9 @@ T RequireAttr(const pugi::xml_node& x, const char* key) {
 } // RequireAttr
 
 struct LatLon {
-  Angle latitude;
-  Angle longitude;
+  Angle latitude  = Angle{};
+  Angle longitude = Angle{};
+  LatLon() = default;
   LatLon(Angle lat, Angle lon)
     : latitude{lat}, longitude{lon}
   {
