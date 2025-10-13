@@ -17,20 +17,27 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <iterator>
+#include <unordered_map>
+#include <regex>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <utility>
 #include <vector>
+#include <optional>
+#include <iterator>
+#include <functional>
+#include <concepts>
+#include <utility>
 #include <stdexcept>
 #include <limits>
+#include <type_traits>
+#include <cstring>
 #include <cmath>
 #include <cctype>
 
 namespace {
 
 namespace fs = std::filesystem;
+namespace gsl = gsl_lite;
 
 using Angle = double;
 using XmlNode = pugi::xml_node;
@@ -50,42 +57,56 @@ auto Sanitize(std::string_view s) -> std::string {
   return out;
 } // Sanitize
 
-[[noreturn]] void InvalidNode(const XmlNode& xml, std::string what)
-  { throw std::runtime_error{what + " on <" + xml.name() + ">"};
+template<typename T>
+concept Enum = std::is_enum_v<T>;
+
+template<Enum E> constexpr E enum_cast(int value);
+
+[[noreturn]] void InvalidNode(const XmlNode& xml, std::string what) {
+  what.reserve(what.size() + 8 + std::strlen(xml.name()));
+  what += " on <";
+  what += xml.name();
+  what += ">";
+  throw std::runtime_error{what};
+} // InvalidNode
 
 [[noreturn]] void InvalidAttr(const XmlNode& xml, const char* key,
                               std::string what="Invalid attribute")
 {
-  what += " \"" + key + "\" ";
+  what.reserve(what.size() + std::strlen(key) + 40);
+  what += " \"";
+  what += key;
+  what += "\" ";
   auto a = xml.attribute(key);
-  if (a)
-    what += "= " + a.value().as_string();
-  else
-    what += "is missing";
-  InvalidNode(xml, what);
-}
-
-template<typename T=std::string>
-T RequireAttr(const pugi::xml_node& n, const char* key) {
-  const auto& a = n.attribute(key);
-  if (!a)
-    InvalidAttr(n, key);
-  if constexpr (std::is_same_v<T, std::string>) {
-    auto s = a.as_string();
-    if (!s.empty())
-      return s;
+  if (a) {
+    what += "= ";
+    what += a.as_string();
   }
-  else if constexpr (std::is_same_v<T, bool) {
+  else {
+    what += "is missing";
+  }
+  InvalidNode(xml, what);
+} // InvalidAttr
+
+template<typename T>
+std::optional<T> GetAttr(const XmlNode& x, const char* key) {
+  const auto& a = x.attribute(key);
+  if (!a)
+    return std::nullopt;
+  if constexpr (std::is_same_v<T, std::string>) {
+    return a.as_string();
+  }
+  else if constexpr (std::is_same_v<T, bool>) {
     return a.as_bool();
   }
   else if constexpr (std::is_enum_v<T>) {
     auto e = a.as_int(-1);
     if (e != -1)
-      return static_cast<T>(e);
+      return enum_cast<T>(e);
   }
   else if constexpr (std::is_floating_point_v<T>) {
-    auto x = a.as_double(std::numeric_limits<double>::NaN());
-    if (!std::isNan(x))
+    auto x = a.as_double(std::numeric_limits<double>::infinity());
+    if (std::isfinite(x))
       return static_cast<T>(x);
   }
   else if constexpr (std::is_same_v<T, std::uint64_t>) {
@@ -110,7 +131,26 @@ T RequireAttr(const pugi::xml_node& n, const char* key) {
         return static_cast<T>(x);
     }
   }
-  InvalidAttr(n, key);
+  else {
+    static_assert(false, "GetAttr: invalid type");
+  }
+  InvalidAttr(x, key);
+} // GetAttr
+
+template<typename T=std::string>
+T RequireAttr(const pugi::xml_node& x, const char* key) {
+  const auto& a = x.attribute(key);
+  if (!a)
+    InvalidAttr(x, key);
+  auto v = GetAttr<T>(x, key);
+  if (v)
+    return *v;
+  if constexpr (std::is_same_v<T, std::string>) {
+    auto s = a.as_string();
+    if (s[0] != '\0')
+      return s;
+  }
+  InvalidAttr(x, key);
 } // RequireAttr
 
 struct LatLon {
@@ -121,23 +161,24 @@ struct LatLon {
   {
     if (lat < -90.0 || lat > +90.0)
       throw std::runtime_error{"Invalid latitude: " + std::to_string(lat)};
-    if (lon < -180.0 || lat > +180.0)
-      throw std::runtime_error{"Invalid longitude: " + std::to_string(lat)};
+    if (lon < -180.0 || lon > +180.0)
+      throw std::runtime_error{"Invalid longitude: " + std::to_string(lon)};
   }
 }; // LatLon
 
 struct Customer {
   std::string id;    // CTR @A
   std::string name;  // CTR @B
-  const XmlNode& xml;
+  const XmlNode* xml = nullptr;
+  Customer() = default;
   explicit Customer(const XmlNode& x)
     : id  {RequireAttr<std::string>(x, "A")}
     , name{RequireAttr<std::string>(x, "B")}
-    , xml {x}
+    , xml {&x}
     {
-      static const re = std::regex{"(CTR|CTR-)[0-9]+"};
+      static const auto re = std::regex{"(CTR|CTR-)[0-9]+"};
       if (!std::regex_match(id, re))
-        InvalidNode(xml, "Invalid customer id: " + id);
+        InvalidNode(x, "Invalid customer id: " + id);
     }
 }; // Customer
 
@@ -145,86 +186,234 @@ struct Farm {
   std::string id;          // FRM @A
   std::string name;        // FRM @B
   std::string custId;      // FRM @I -> CTR @A
-  const XmlNode& xml;
+  const XmlNode* xml = nullptr;
+  Farm() = default;
   explicit Farm(const XmlNode& x)
     : id    {RequireAttr<std::string>(x, "A")}
     , name  {Sanitize(RequireAttr<std::string>(x, "B"))}
     , custId{RequireAttr<std::string>(x, "I")}
-    , xml   {x}
+    , xml   {&x}
     {
-      static const re = std::regex{"(FRM|FRM-)[0-9]+"};
+      static const auto re = std::regex{"(FRM|FRM-)[0-9]+"};
       if (!std::regex_match(id, re))
-        InvalidNode(xml, "Invalid farm id: " + id);
+        InvalidNode(x, "Invalid farm id: " + id);
     }
 }; // Farm
-
-struct Field {
-  std::string id;         // PFD @A
-  std::string name;       // PFD @C (optional display)
-  std::string custId;     // PFD @E -> CTR @A
-  std::string farmId;     // PFD @F -> FRM @A
-  const XmlNode& xml;
-  explicit Field(const XmlNode& x)
-    : id{RequireAttr<std::string>(x, "A")}
-    , name{Sanitize(RequireAttr<std::string>(x, "C"))}
-    , custId{RequireAttr<std::string>(x, "E")}
-    , farmId{RequireAttr<std::string>(x, "F")}
-    , xml{x}
-    {
-      static const re = std::regex{"(PFD|PFD-)[0-9]+"};
-      if (!std::regex_match(id, re))
-        InvalidNode(xml, "Invalid field id: " + id);
-    }
-}; // Field
 
 struct Point {
   enum class Type {
     Flag=1, Other, Access, Storage, Obstacle, GuideA, GuideB,
     GuideCenter, GuidePoint, Field, Base
   };
-  static bool IsValidType(Type x) {
+  static constexpr const char* Name(Type x) {
     switch (x) {
-      case Flag:
-      case Other:
-      case Access:
-      case Storage:
-      case Obstacle:
-      case GuideA:
-      case GuideB:
-      case GuideCenter:
-      case GuidePoint:
-      case Field:
-      case Base:
-        return true;
-      default:
-        return false;
+      case Type::Flag:        return "Type::Flag";
+      case Type::Other:       return "Type::Other";
+      case Type::Access:      return "Type::Access";
+      case Type::Storage:     return "Type::Storage";
+      case Type::Obstacle:    return "Type::Obstacle";
+      case Type::GuideA:      return "Type::GuideA";
+      case Type::GuideB:      return "Type::GuideB";
+      case Type::GuideCenter: return "Type::GuideCenter";
+      case Type::GuidePoint:  return "Type::GuidePoint";
+      case Type::Field:       return "Type::Field";
+      case Type::Base:        return "Type::Base";
+      default: return nullptr;
     }
-  }
+  } // Name(Type)
   Type type;
   LatLon point;
-  const XmlNode& xml;
-  explicit Point(const XmlNode& x)
+  const XmlNode* xml;
+  using TypeValidator = std::function<bool(Type)>;
+  static constexpr bool AnyType(Type) { return true; }
+  Point() = default;
+  explicit Point(const XmlNode& x, TypeValidator validator=AnyType)
     : type{ RequireAttr<Type >(x, "A")}
     , point{RequireAttr<Angle>(x, "C"),
             RequireAttr<Angle>(x, "D")}
-    , xml{x}
-  {
-    if (!IsValidType(type))
-      InvalidAttr(x, "A", "invalid point type");
-  }
+    , xml{&x}
+    {
+      if (!validator(type)) {
+        auto msg = std::string{"Point: invalid type in this context: "}
+                 + Name(type);
+        throw std::range_error{msg};
+      }
+    }
 }; // Point
 
-using Ring = std::vector<Point>;
+template<> constexpr Point::Type enum_cast<Point::Type>(int x) {
+  auto e = static_cast<Point::Type>(x);
+  if (Point::Name(e)) [[likely]]
+    return e;
+  throw std::range_error{"Invalid Point::Type: " + std::to_string(x)};
+} // enum_cast
+
+struct LineString { // LSG
+  enum class Type {
+    Exterior=1,
+    Interior,
+    TramLine,
+    Sampling,
+    Guidance,
+    Drainage,
+    Fence,
+    Flag,
+    Obstacle
+  };
+  static constexpr const char* Name(Type x) {
+    switch (x) {
+      case Type::Exterior:  return "Type::Exterior";
+      case Type::Interior:  return "Type::Interior";
+      case Type::TramLine:  return "Type::TramLine";
+      case Type::Sampling:  return "Type::Sampling";
+      case Type::Guidance:  return "Type::Guidance";
+      case Type::Drainage:  return "Type::Drainage";
+      case Type::Fence:     return "Type::Fence";
+      case Type::Flag:      return "Type::Flag";
+      case Type::Obstacle:  return "Type::Obstacle";
+      default: return nullptr;
+    }
+  } // Name(Type)
+  Type type;
+  std::vector<Point> points;
+  const XmlNode* xml = nullptr;
+
+  bool empty() const { return points.empty(); }
+  std::size_t size() const { return points.size(); }
+
+  LineString() = default;
+  explicit LineString(const XmlNode& x,
+                      Point::TypeValidator point_validator=Point::AnyType)
+    : type{RequireAttr<Type>(x, "A")}
+    , xml{&x}
+  {
+    for (const auto& pnt: x.children("PNT"))
+      points.emplace_back(Point{pnt, point_validator});
+  }
+}; // LineString
+
+template<> constexpr LineString::Type enum_cast<LineString::Type>(int x) {
+  auto e = static_cast<LineString::Type>(x);
+  if (LineString::Name(e)) [[likely]]
+    return e;
+  throw std::range_error{"Invalid LineString type: " + std::to_string(x)};
+}; // enum_cast
+
+struct Polygon { // PLN
+  enum class Type {
+    Boundary=1,
+    Treatment,
+    Water,
+    Building,
+    Road,
+    Obstacle,
+    Flag,
+    Other,
+    Field,
+    Headland,
+    Buffer,
+    Windbreak
+  }; // Type
+
+  static constexpr const char* Name(Type x) {
+    switch (x) {
+      case Type::Boundary:  return "Type::Boundary";
+      case Type::Treatment: return "Type::Treatment";
+      case Type::Water:     return "Type::Water";
+      case Type::Building:  return "Type::Building";
+      case Type::Road:      return "Type::Road";
+      case Type::Obstacle:  return "Type::Obstacle";
+      case Type::Flag:      return "Type::Flag";
+      case Type::Other:     return "Type::Other";
+      case Type::Field:     return "Type::Field";
+      case Type::Headland:  return "Type::Headland";
+      case Type::Buffer:    return "Type::Buffer";
+      case Type::Windbreak: return "Type::Windbreak";
+      default: return nullptr;
+    }
+  } // Name(Type)
+
+  Type type;
+  LineString outer;
+  std::vector<LineString> inners;
+  const XmlNode* xml = nullptr;
+
+  Polygon() = default;
+  explicit Polygon(const XmlNode& x)
+    : type{RequireAttr<Type>(x, "A")}
+    , xml{&x}
+  {
+    auto point_validator = [](Point::Type t) -> bool {
+      return (t == Point::Type::Field);
+    };
+    for (const auto& lsg: x.children("LSG")) {
+      auto ring = LineString{lsg, point_validator};
+      switch (ring.type) {
+        case LineString::Type::Exterior:
+          if (!outer.empty())
+            throw std::runtime_error{"Polygon: multiple exterior rings"};
+          outer = std::move(ring);
+          break;
+        case LineString::Type::Interior:
+          inners.emplace_back(std::move(ring));
+          break;
+        default: {
+          auto msg = std::string{"Polygon: unexpected LineString type: "}
+                   + LineString::Name(ring.type);
+          throw std::runtime_error{msg};
+        }
+      }
+    }
+    if (outer.empty())
+      throw std::runtime_error{"Polygon: missing exterior ring"};
+    if (std::ssize(outer) < 4)
+      throw std::runtime_error{"Polygon: exterior ring too small"};
+    for (const auto& r: inners) {
+      if (std::ssize(r) < 4)
+        throw std::runtime_error{"Polygon: inter ring too small"};
+    }
+  }
+}; // Polygon
+
+template<> Polygon::Type enum_cast<Polygon::Type>(int x) {
+  auto e = static_cast<Polygon::Type>(x);
+  if (Polygon::Name(e)) [[likely]]
+    return e;
+  throw std::range_error{"Invalid Polygon type: " + std::to_string(x)};
+} // enum_cast
+
+struct Field {
+  std::string id;         // PFD @A
+  std::string name;       // PFD @C (optional display)
+  std::string custId;     // PFD @E -> CTR @A
+  std::string farmId;     // PFD @F -> FRM @A
+  std::vector<Polygon> parts;
+  const XmlNode* xml = nullptr;
+  Field() = default;
+  explicit Field(const XmlNode& x)
+    : id{RequireAttr<std::string>(x, "A")}
+    , name{Sanitize(RequireAttr<std::string>(x, "C"))}
+    , custId{RequireAttr<std::string>(x, "E")}
+    , farmId{RequireAttr<std::string>(x, "F")}
+    , xml{&x}
+  {
+    static const auto re = std::regex{"(PFD|PFD-)[0-9]+"};
+    if (!std::regex_match(id, re))
+      InvalidNode(x, "Invalid field id: " + id);
+    for (const auto& pln: x.children("PLN"))
+      parts.emplace_back(Polygon{pln});
+  }
+}; // Field
 
 // ---------- Parse ----------
 
-struct Parsed {
+struct TaskData {
   std::unordered_map<std::string, Customer>  customers; // CTR @A
   std::unordered_map<std::string, Farm>      farms;     // FRM @A
   std::unordered_map<std::string, Field>     fields;    // PFD @A
-}; // Parsed
+}; // TaskData
 
-auto LoadTaskData(const fs::path& xml_path) -> Parsed {
+auto LoadTaskData(const fs::path& xml_path) -> TaskData {
   auto doc = pugi::xml_document{};
 
   // Keep a stable string; pugixml's load_file expects c-string
@@ -240,87 +429,67 @@ auto LoadTaskData(const fs::path& xml_path) -> Parsed {
   if (!root)
     throw std::runtime_error("not an <ISO11783_TaskData> document");
 
-  auto out = Parsed{};
+  auto out = TaskData{};
 
   // --- Customers (CTR) ---
   for (auto ctr : root.children("CTR")) {
     auto cust = Customer{ctr};
     auto id   = cust.id;
-    auto r = out.customers.try_emplace(id, std::move{cust});
+    out.customers[id] = std::move(cust);
+#if 0
+    auto r = out.customers.try_emplace(id, std::move(cust));
     if (!r.second)
       InvalidNode(ctr, "Invalid (duplicate?) customer: " + id);
+#endif
   }
 
   // --- Farms (FRM) ---
   for (auto frm : root.children("FRM")) {
-    auto farm = Farm{fmr};
+    auto farm = Farm{frm};
     {
-      auto iter = out.customers.find(farm.custId);
-      if (iter == out.customers.end())
-        InvalidAttr(ctr, farm.custId.c_str(), "Farm has invalid customer id");
+      if (!out.customers.contains(farm.custId))
+        InvalidNode(frm, "Farm has invalid customer id: " + farm.custId);
     }
     auto id = farm.id;
-    auto r = out.farms.try_emplace(id, std::move{farm});
+    out.farms[id] = std::move(farm);
+#if 0
+    auto r = out.farms.try_emplace(id, std::move(farm));
     if (!r.second)
-      InvalidNode(ctr, "Invalid (duplicate?) farm: " + id);
+      InvalidNode(frm, "Invalid (duplicate?) farm: " + id);
+#endif
   }
 
   // --- Fields (PFD) + Plans + LineStringGroups ---
   for (auto pfd : root.children("PFD")) {
     auto field = Field{pfd};
-    if (!out.customers.contains(field.custId)) {
-      InvalidNode(ctr, "Field has invalid customer id: "
-                       + field.custId);
-    }
-    if (!out.farms.contains(field.farmId)) {
-      InvalidNode(ctr, "Field has invalid farm id: "
-                       + field.farmId);
-    }
+    if (!out.customers.contains(field.custId))
+      InvalidNode(pfd, "Field has invalid customer id: " + field.custId);
+    if (!out.farms.contains(field.farmId))
+      InvalidNode(pfd, "Field has invalid farm id: " + field.farmId);
 
+    auto id = field.id;
+    out.fields[id] = std::move(field);
+#if 0
     auto r = out.fields.try_emplace(field.id, field);
     if (!r.second)
-      InvalidNode(ctr, "Invalid (duplicate?) field: " + field.id);
-
-    for (auto pln : pfd.children("PLN")) {
-      auto pln_id = std::string{pln.attribute("A").as_string("")};
-
-      for (auto lsg : pln.children("LSG")) {
-        auto ring = Lsg{};
-        ring.pfd_id = pfd_id;
-        ring.pln_id = pln_id;
-        ring.lsg_id = std::string{lsg.attribute("A").as_string("")};
-
-        for (auto pnt : lsg.children("PNT")) {
-          const auto lat = pnt.attribute("C").as_double(
-              std::numeric_limits<double>::quiet_NaN());
-          const auto lon = pnt.attribute("D").as_double(
-              std::numeric_limits<double>::quiet_NaN());
-          if (!std::isfinite(lat) || !std::isfinite(lon))
-            throw std::runtime_error("invalid <PNT> coordinates");
-          ring.pts.push_back(Pt{lon, lat}); // store lon=x, lat=y
-        }
-
-        if (!ring.pts.empty())
-          out.lsgs.push_back(std::move(ring));
-      }
-    }
+      InvalidNode(pfd, "Invalid (duplicate?) field: " + field.id);
+#endif
   }
 
   // Optional: basic referential checks (don’t hard-fail; just warn)
   for (const auto& [fid, f] : out.fields) {
-    if (!f.customer.empty() && !out.customers.contains(f.customer)) {
+    if (!f.custId.empty() && !out.customers.contains(f.custId)) {
       std::cerr << "warning: PFD " << fid
-                << " references missing CTR " << f.customer << '\n';
+                << " references missing CTR " << f.custId << '\n';
     }
-    if (!f.farm.empty() && !out.farms.contains(f.farm)) {
+    if (!f.farmId.empty() && !out.farms.contains(f.farmId)) {
       std::cerr << "warning: PFD " << fid
-                << " references missing FRM " << f.farm << '\n';
+                << " references missing FRM " << f.farmId << '\n';
     }
   }
 
   // Require *something* parsed
-  if (out.customers.empty() && out.farms.empty()
-      && out.fields.empty() && out.lsgs.empty())
+  if (out.customers.empty() && out.farms.empty() && out.fields.empty())
     throw std::runtime_error("no recognizable ISO11783 data found");
 
   return out;
@@ -328,60 +497,51 @@ auto LoadTaskData(const fs::path& xml_path) -> Parsed {
 
 // ---------- Output ----------
 
-void PrintSummary(const Parsed& data) {
-  std::cout << "Customers: " << data.customers.size() << '\n';
+void PrintSummary(const TaskData& data) {
+  std::cout << "Customers: " << std::ssize(data.customers) << '\n';
   for (const auto& [id, c] : data.customers)
     std::cout << "  CTR " << id << " : " << c.name << '\n';
 
-  std::cout << "Farms: " << data.farms.size() << '\n';
-  for (const auto& [id, f] : data.farms)
+  std::cout << "Farms: " << std::ssize(data.farms) << '\n';
+  for (const auto& [id, f] : data.farms) {
     std::cout << "  FRM " << id << " : " << f.name
-              << " (CTR=" << f.customer_id << ")\n";
+              << " (CTR=" << f.custId << ")\n";
+  }
 
-  std::cout << "Fields: " << data.fields.size() << '\n';
+  std::cout << "Fields: " << std::ssize(data.fields) << '\n';
   for (const auto& [fid, f] : data.fields) {
-    const auto& cname = (f.customer.empty() || !data.customers.contains(f.customer))
-                        ? std::string_view{"?"}
-                        : std::string_view{data.customers.at(f.customer).name};
-    const auto& fname = (f.farm.empty() || !data.farms.contains(f.farm))
-                        ? std::string_view{"?"}
-                        : std::string_view{data.farms.at(f.farm).name};
+    auto custName = std::string_view{"?"};
+    auto custIter = data.customers.find(f.custId);
+    if (custIter != data.customers.end())
+      custName = custIter->second.name;
+    auto farmName = std::string_view{"?"};
+    auto farmIter = data.farms.find(f.farmId);
+    if (farmIter != data.farms.end())
+      farmName = farmIter->second.name;
+
     std::cout << "  PFD " << fid
               << " : \"" << f.name << "\""
-              << " (CTR=" << f.customer << ":" << cname
-              << ", FRM=" << f.farm << ":" << fname << ")\n";
+              << " (CTR=" << f.custId << ":" << custName
+              << ", FRM=" << f.farmId << ":" << farmName << ")\n";
+    if (f.parts.empty())
+      std::cout << "    No polygons";
+    for (const auto& p: f.parts) {
+      std::cout << "    Polygon: " << Polygon::Name(p.type)
+                << " outer=" << std::ssize(p.outer) << " pts";
+      auto innerCount = std::ssize(p.inners);
+      if (innerCount > 0) {
+        std::cout << ", " << innerCount << " inner rings";
+        auto sum = std::size_t{0};
+        for (const auto& r: p.inners)
+          sum += std::ssize(r);
+        std::cout << ", total=" << sum << " points";
+      }
+      std::cout << std::endl;
+
+    }
   }
 
-  std::cout << "LineStringGroups (LSG): " << std::ssize(data.lsgs) << '\n';
-  for (const auto& r : data.lsgs) {
-    std::cout << "  PFD=" << r.pfd_id
-              << " PLN=" << r.pln_id
-              << " LSG=" << r.lsg_id
-              << " pts=" << std::ssize(r.pts) << '\n';
-  }
 } // PrintSummary
-
-void DumpRings(const std::vector<Lsg>& rings,
-               const fs::path& outdir = fs::path{})
-{
-  for (const auto& r : rings) {
-    const auto base = "pfd-"  + Sanitize(r.pfd_id)
-                    + "_pln-" + Sanitize(r.pln_id)
-                    + "_lsg-" + Sanitize(r.lsg_id) + ".xy";
-    const auto fn = outdir / base;
-
-    auto ofs = std::ofstream{fn, std::ios::binary};
-    if (!ofs)
-      throw std::runtime_error("cannot open for writing: " + fn.string());
-
-    ofs.setf(std::ios::fixed, std::ios::floatfield);
-    ofs.precision(12);
-    for (const auto& p : r.pts)
-      ofs << p.lon << ' ' << p.lat << '\n';
-
-    std::cout << "wrote " << fn << " (" << std::ssize(r.pts) << " points)\n";
-  }
-} // DumpRings
 
 } // local
 
@@ -389,27 +549,14 @@ void DumpRings(const std::vector<Lsg>& rings,
 
 auto main(int argc, char** argv) -> int {
   if (argc < 2) {
-    std::cerr << "usage: field_xml <taskdata.xml> [--dump] [--outdir DIR]\n";
+    std::cerr << "usage: field_xml <taskdata.xml>\n";
     return EXIT_FAILURE;
   }
   try {
-    const auto xml = std::filesystem::path{argv[1]};
-
-    auto do_dump = false;
-    auto outdir  = std::filesystem::path{};
-
-    for (int i = 2; i < argc; ++i) {
-      const auto arg = std::string_view{argv[i]};
-      if (arg == "--dump") {
-        do_dump = true;
-      } else if (arg == "--outdir" && i + 1 < argc) {
-        outdir = std::filesystem::path{argv[++i]};
-      }
-    }
+    const auto xml = fs::path{argv[1]};
 
     const auto parsed = LoadTaskData(xml);
     PrintSummary(parsed);
-    if (do_dump) DumpRings(parsed.lsgs, outdir);
 
     return EXIT_SUCCESS;
   }
