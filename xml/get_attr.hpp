@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <optional>
+#include <format>
 #include <stdexcept>
 #include <concepts>
 #include <charconv>
@@ -45,7 +46,7 @@ concept HasFromChars = Enum<E> && requires(std::string_view sv) {
 } // detail
 
 template<typename T>
-inline std::optional<T> get_opt_attr(const pugi::xml_attribute& a) noexcept {
+inline std::optional<T> try_get_attr(const pugi::xml_attribute& a) noexcept {
   if (!a) return std::nullopt;
 
   if constexpr (std::is_same_v<T, const char*>)
@@ -81,14 +82,14 @@ inline std::optional<T> get_opt_attr(const pugi::xml_attribute& a) noexcept {
       default:  break;
     }
   }
-  else if constexpr (EnumWithName<T> || detail::HasFromChars<T>) {
+  else if constexpr (EnumWithCast<T> || detail::HasFromChars<T>) {
     if constexpr (detail::HasFromChars<T>) {
       auto v = FromChars<T>(std::string_view{a.value()});
       if (v) return *v;
     }
-    if constexpr (EnumWithName<T>) {
+    if constexpr (EnumWithCast<T>) {
       using U = std::underlying_type_t<T>;
-      if (auto u = get_opt_attr<U>(a)) return enum_cast<T>(*u);
+      if (auto u = try_get_attr<U>(a)) return enum_cast<T>(*u);
     }
   }
   else if constexpr (std::integral<T>) {
@@ -134,14 +135,17 @@ inline std::optional<T> get_opt_attr(const pugi::xml_attribute& a) noexcept {
     static_assert(detail::DependentFalse<T>, "get_attr: invalid type");
   }
   return std::nullopt;
-} // get_opt_attr
+} // try_get_attr
 
 template<typename T>
 inline T get_attr(const pugi::xml_attribute& a) {
   if (!a) throw std::runtime_error{"get_attr: empty attribute"};
-  auto v = get_opt_attr<T>(a);
-  if (!v) throw std::runtime_error{"get_attr: invalid attribute"};
-  return *v;
-}
+  auto v = try_get_attr<T>(a);
+  if (v)
+    return *v;
+  auto msg = std::format("get_attr: invalid attribute: {}={}",
+                         a.name(), a.value());
+  throw std::runtime_error{msg};
+} // get_attr
 
 } // tjg

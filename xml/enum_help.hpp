@@ -36,6 +36,11 @@ constexpr std::optional<E> enum_cast(T&& other) noexcept {
   return Name(e) ? std::optional<E>{e} : std::nullopt;
 } // enum_cast
 
+template<class E>
+concept EnumWithCast = Enum<E> && requires(std::underlying_type_t<E> x) {
+  { enum_cast<E>(x) } -> std::same_as<E>;
+};
+
 namespace detail {
 
 constexpr bool EqualSvCz(std::string_view sv, const char* cz) noexcept {

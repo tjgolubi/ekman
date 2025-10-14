@@ -10,9 +10,11 @@
 /// - Filenames sanitized with isalnum + [_-.].
 /// - No schema validation; fast DOM parsing via pugixml.
 
-#include <gsl-lite/gsl-lite.hpp>
+#include "get_attr.hpp"
 
 #include <pugixml.hpp>
+
+#include <gsl-lite/gsl-lite.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -57,11 +59,6 @@ auto Sanitize(std::string_view s) -> std::string {
   return out;
 } // Sanitize
 
-template<typename T>
-concept Enum = std::is_enum_v<T>;
-
-template<Enum E> constexpr E enum_cast(int value);
-
 [[noreturn]] void InvalidNode(const XmlNode& xml, std::string what) {
   what.reserve(what.size() + 8 + std::strlen(xml.name()));
   what += " on <";
@@ -91,50 +88,7 @@ template<Enum E> constexpr E enum_cast(int value);
 template<typename T>
 std::optional<T> GetAttr(const XmlNode& x, const char* key) {
   const auto& a = x.attribute(key);
-  if (!a)
-    return std::nullopt;
-  if constexpr (std::is_same_v<T, std::string>) {
-    return a.as_string();
-  }
-  else if constexpr (std::is_same_v<T, bool>) {
-    return a.as_bool();
-  }
-  else if constexpr (std::is_enum_v<T>) {
-    auto e = a.as_int(-1);
-    if (e != -1)
-      return enum_cast<T>(e);
-  }
-  else if constexpr (std::is_floating_point_v<T>) {
-    auto x = a.as_double(std::numeric_limits<double>::infinity());
-    if (std::isfinite(x))
-      return static_cast<T>(x);
-  }
-  else if constexpr (std::is_same_v<T, std::uint64_t>) {
-    auto x = a.as_ullong(std::numeric_limits<T>::max());
-    if (x != std::numeric_limits<T>::max())
-      return static_cast<T>(x);
-  }
-  else if constexpr (std::is_same_v<T, std::int64_t>) {
-    auto x = a.as_llong(std::numeric_limits<T>::max());
-    if (x != std::numeric_limits<T>::max())
-      return static_cast<T>(x);
-  }
-  else if constexpr (std::is_integral_v<T>) {
-    if constexpr (std::is_signed_v<T>) {
-      auto x = a.as_int(std::numeric_limits<int>::max());
-      if (x != std::numeric_limits<int>::max())
-        return static_cast<T>(x);
-    }
-    else {
-      auto x = a.as_uint(std::numeric_limits<unsigned>::max());
-      if (x != std::numeric_limits<unsigned>::max())
-        return static_cast<T>(x);
-    }
-  }
-  else {
-    static_assert(false, "GetAttr: invalid type");
-  }
-  InvalidAttr(x, key);
+  return (a) ? tjg::try_get_attr<T>(a) : std::nullopt;
 } // GetAttr
 
 template<typename T=std::string>
@@ -208,17 +162,17 @@ struct Point {
   };
   static constexpr const char* Name(Type x) {
     switch (x) {
-      case Type::Flag:        return "Type::Flag";
-      case Type::Other:       return "Type::Other";
-      case Type::Access:      return "Type::Access";
-      case Type::Storage:     return "Type::Storage";
-      case Type::Obstacle:    return "Type::Obstacle";
-      case Type::GuideA:      return "Type::GuideA";
-      case Type::GuideB:      return "Type::GuideB";
-      case Type::GuideCenter: return "Type::GuideCenter";
-      case Type::GuidePoint:  return "Type::GuidePoint";
-      case Type::Field:       return "Type::Field";
-      case Type::Base:        return "Type::Base";
+      case Type::Flag:        return "Flag";
+      case Type::Other:       return "Other";
+      case Type::Access:      return "Access";
+      case Type::Storage:     return "Storage";
+      case Type::Obstacle:    return "Obstacle";
+      case Type::GuideA:      return "GuideA";
+      case Type::GuideB:      return "GuideB";
+      case Type::GuideCenter: return "GuideCenter";
+      case Type::GuidePoint:  return "GuidePoint";
+      case Type::Field:       return "Field";
+      case Type::Base:        return "Base";
       default: return nullptr;
     }
   } // Name(Type)
@@ -228,26 +182,23 @@ struct Point {
   using TypeValidator = std::function<bool(Type)>;
   static constexpr bool AnyType(Type) { return true; }
   Point() = default;
-  explicit Point(const XmlNode& x, TypeValidator validator=AnyType)
-    : type{ RequireAttr<Type >(x, "A")}
-    , point{RequireAttr<Angle>(x, "C"),
-            RequireAttr<Angle>(x, "D")}
-    , xml{&x}
-    {
-      if (!validator(type)) {
-        auto msg = std::string{"Point: invalid type in this context: "}
-                 + Name(type);
-        throw std::range_error{msg};
-      }
-    }
+  explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
 }; // Point
 
-template<> constexpr Point::Type enum_cast<Point::Type>(int x) {
-  auto e = static_cast<Point::Type>(x);
-  if (Point::Name(e)) [[likely]]
-    return e;
-  throw std::range_error{"Invalid Point::Type: " + std::to_string(x)};
-} // enum_cast
+constexpr const char* Name(Point::Type t) noexcept { return Point::Name(t); }
+
+Point::Point(const XmlNode& x, TypeValidator validator)
+  : type{ RequireAttr<int >(x, "A")}
+  , point{RequireAttr<Angle>(x, "C"),
+          RequireAttr<Angle>(x, "D")}
+  , xml{&x}
+  {
+    if (!validator(type)) {
+      auto msg = std::string{"Point: invalid type in this context: "}
+               + Name(type);
+      throw std::range_error{msg};
+    }
+  }
 
 struct LineString { // LSG
   enum class Type {
@@ -263,15 +214,15 @@ struct LineString { // LSG
   };
   static constexpr const char* Name(Type x) {
     switch (x) {
-      case Type::Exterior:  return "Type::Exterior";
-      case Type::Interior:  return "Type::Interior";
-      case Type::TramLine:  return "Type::TramLine";
-      case Type::Sampling:  return "Type::Sampling";
-      case Type::Guidance:  return "Type::Guidance";
-      case Type::Drainage:  return "Type::Drainage";
-      case Type::Fence:     return "Type::Fence";
-      case Type::Flag:      return "Type::Flag";
-      case Type::Obstacle:  return "Type::Obstacle";
+      case Type::Exterior:  return "Exterior";
+      case Type::Interior:  return "Interior";
+      case Type::TramLine:  return "TramLine";
+      case Type::Sampling:  return "Sampling";
+      case Type::Guidance:  return "Guidance";
+      case Type::Drainage:  return "Drainage";
+      case Type::Fence:     return "Fence";
+      case Type::Flag:      return "Flag";
+      case Type::Obstacle:  return "Obstacle";
       default: return nullptr;
     }
   } // Name(Type)
@@ -284,21 +235,19 @@ struct LineString { // LSG
 
   LineString() = default;
   explicit LineString(const XmlNode& x,
-                      Point::TypeValidator point_validator=Point::AnyType)
-    : type{RequireAttr<Type>(x, "A")}
-    , xml{&x}
-  {
-    for (const auto& pnt: x.children("PNT"))
-      points.emplace_back(Point{pnt, point_validator});
-  }
+                      Point::TypeValidator point_validator=Point::AnyType);
 }; // LineString
 
-template<> constexpr LineString::Type enum_cast<LineString::Type>(int x) {
-  auto e = static_cast<LineString::Type>(x);
-  if (LineString::Name(e)) [[likely]]
-    return e;
-  throw std::range_error{"Invalid LineString type: " + std::to_string(x)};
-}; // enum_cast
+constexpr const char* Name(LineString::Type t) noexcept
+  { return LineString::Name(t); }
+
+LineString::LineString(const XmlNode& x, Point::TypeValidator point_validator)
+  : type{RequireAttr<int>(x, "A")}
+  , xml{&x}
+{
+  for (const auto& pnt: x.children("PNT"))
+    points.emplace_back(Point{pnt, point_validator});
+}
 
 struct Polygon { // PLN
   enum class Type {
@@ -318,18 +267,18 @@ struct Polygon { // PLN
 
   static constexpr const char* Name(Type x) {
     switch (x) {
-      case Type::Boundary:  return "Type::Boundary";
-      case Type::Treatment: return "Type::Treatment";
-      case Type::Water:     return "Type::Water";
-      case Type::Building:  return "Type::Building";
-      case Type::Road:      return "Type::Road";
-      case Type::Obstacle:  return "Type::Obstacle";
-      case Type::Flag:      return "Type::Flag";
-      case Type::Other:     return "Type::Other";
-      case Type::Field:     return "Type::Field";
-      case Type::Headland:  return "Type::Headland";
-      case Type::Buffer:    return "Type::Buffer";
-      case Type::Windbreak: return "Type::Windbreak";
+      case Type::Boundary:  return "Boundary";
+      case Type::Treatment: return "Treatment";
+      case Type::Water:     return "Water";
+      case Type::Building:  return "Building";
+      case Type::Road:      return "Road";
+      case Type::Obstacle:  return "Obstacle";
+      case Type::Flag:      return "Flag";
+      case Type::Other:     return "Other";
+      case Type::Field:     return "Field";
+      case Type::Headland:  return "Headland";
+      case Type::Buffer:    return "Buffer";
+      case Type::Windbreak: return "Windbreak";
       default: return nullptr;
     }
   } // Name(Type)
@@ -341,7 +290,7 @@ struct Polygon { // PLN
 
   Polygon() = default;
   explicit Polygon(const XmlNode& x)
-    : type{RequireAttr<Type>(x, "A")}
+    : type{RequireAttr<int>(x, "A")}
     , xml{&x}
   {
     auto point_validator = [](Point::Type t) -> bool {
@@ -375,13 +324,6 @@ struct Polygon { // PLN
     }
   }
 }; // Polygon
-
-template<> Polygon::Type enum_cast<Polygon::Type>(int x) {
-  auto e = static_cast<Polygon::Type>(x);
-  if (Polygon::Name(e)) [[likely]]
-    return e;
-  throw std::range_error{"Invalid Polygon type: " + std::to_string(x)};
-} // enum_cast
 
 struct Field {
   std::string id;         // PFD @A
