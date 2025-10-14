@@ -369,7 +369,7 @@ template<> struct EnumValues<Polygon::Type>: Polygon::Types { };
 } // tjg
 
 Polygon::Polygon(const XmlNode& x)
-  : type{RequireAttr<Type>(x, "A")}
+  : type{RequireAttr<int>(x, "A")}
 {
   auto point_validator = [](Point::Type t) -> bool {
     return (t == Point::Type::Field);

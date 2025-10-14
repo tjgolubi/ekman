@@ -38,7 +38,7 @@ constexpr std::optional<E> enum_cast(T&& other) noexcept {
 
 template<class E>
 concept EnumWithCast = Enum<E> && requires(std::underlying_type_t<E> x) {
-  { enum_cast<E>(x) } -> std::same_as<E>;
+  { enum_cast<E>(x) } -> std::same_as<std::optional<E>>;
 };
 
 namespace detail {

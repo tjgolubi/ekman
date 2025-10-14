@@ -82,7 +82,7 @@ inline std::optional<T> try_get_attr(const pugi::xml_attribute& a) noexcept {
       default:  break;
     }
   }
-  else if constexpr (EnumWithCast<T> || detail::HasFromChars<T>) {
+  else if constexpr (Enum<T>) {
     if constexpr (detail::HasFromChars<T>) {
       auto v = FromChars<T>(std::string_view{a.value()});
       if (v) return *v;
