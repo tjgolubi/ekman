@@ -21,6 +21,8 @@
 #include <format>
 #include <iostream>
 #include <iomanip>
+#include <stdexcept>
+#include <exception>
 #include <utility>
 #include <cstdint>
 
@@ -146,7 +148,7 @@ Farm::Farm(const XmlNode& node)
 {
   for (const auto& a: node.attributes()) {
     auto k = tjg::name(a);
-    if (k == "A" || k == "B" || k == "C")
+    if (k == "A" || k == "B" || k == "I")
       continue;
     otherAttrs.emplace_back(a.name(), a.value());
   }
@@ -569,19 +571,19 @@ void Swath::dump(XmlNode node) const {
   if (option)    node.append_attribute("D") = static_cast<int>(*option);
   if (direction) node.append_attribute("E") = static_cast<int>(*direction);
   if (extension) node.append_attribute("F") = static_cast<int>(*extension);
-  if (heading)   node.append_attribute("G") = static_cast<double>(*heading);
-  if (radius)    node.append_attribute("H") = static_cast<unsigned>(*radius);
+  if (heading)   node.append_attribute("G") = *heading;
+  if (radius)    node.append_attribute("H") = *radius;
   if (method)    node.append_attribute("I") = static_cast<int>(*method);
   if (horizontalAccuracy)
-      node.append_attribute("J") = static_cast<double>(*horizontalAccuracy);
+      node.append_attribute("J") = *horizontalAccuracy;
   if (verticalAccuracy)
-      node.append_attribute("K") = static_cast<double>(*verticalAccuracy);
+      node.append_attribute("K") = *verticalAccuracy;
   if (!baseId.empty()) node.append_attribute("L") = baseId;
   if (!srid.empty())   node.append_attribute("M") = srid;
   if (leftRemaining)
-      node.append_attribute("N") = static_cast<unsigned>(*leftRemaining);
+      node.append_attribute("N") = *leftRemaining;
   if (rightRemaining)
-      node.append_attribute("O") = static_cast<unsigned>(*rightRemaining);
+      node.append_attribute("O") = *rightRemaining;
   for (const auto& [k, v]: otherAttrs)
     node.append_attribute(k) = v;
   for (const auto& b: boundaries)
@@ -772,6 +774,7 @@ RootMeta::RootMeta(const XmlNode& node)
 } // RootMeta ctor
 
 void RootMeta::dump(XmlNode node) const {
+  node.set_name(isoxml::Root);
   if (versionMajor < 0 || versionMinor < 0) {
     auto msg = std::format("RootMeta::dump: invlid version: {}.{}",
                            versionMajor, versionMinor);
@@ -795,33 +798,55 @@ void RootMeta::dump(XmlNode node) const {
     frm.dump(node.append_child("FRM"));
   for (const auto& pfd: fields)
     pfd.dump(node.append_child("PFD"));
+  for (const auto& vpn: values)
+    vpn.dump(node.append_child("VPN"));
 } // RootMeta::dump
 
 // ---------------------------------------------------------------------
 // Main: load, basic validation, ordered traversal with dispatch.
 int main(int argc, const char *argv[]) {
-  const auto path = (argc > 1) ? argv[1] : "TASKDATA.XML";
+  try {
+    const auto path = (argc > 1) ? argv[1] : "TASKDATA.XML";
 
-  pugi::xml_document doc;
-  auto res = doc.load_file(path, pugi::parse_default | pugi::parse_ws_pcdata);
-  if (!res) {
-    std::cerr << std::format("XML parse error: {} (offset {})\n",
-                             res.description(), res.offset);
-    return 1;
+    auto doc = pugi::xml_document{};
+    auto res = doc.load_file(path, pugi::parse_default | pugi::parse_ws_pcdata);
+    if (!res) {
+      std::cerr << std::format("XML parse error: {} (offset {})\n",
+                               res.description(), res.offset);
+      return 1;
+    }
+
+    auto root = doc.child(isoxml::Root);
+    if (!root) {
+      std::cerr << std::format("error: missing root <{}>\n", isoxml::Root);
+      return 1;
+    }
+
+    auto top = RootMeta{root};
+    std::cout << top.customers.size() << " customers\n"
+              << top.farms.size()     << " farms\n"
+              << top.fields.size()    << " fields\n"
+              << top.values.size()    << " values\n";
+
+    top.mgmtManufacturer = "Terry Golubiewski";
+    top.mgmtVersion = "0.1 (alpha)";
+
+    auto doc2 = pugi::xml_document{};
+    auto root2 = doc2.append_child(isoxml::Root);
+    top.dump(root2);
+
+    auto ok = doc2.save_file("out.xml", "  ");
+    if (!ok)
+      throw std::runtime_error{"Error writing 'out.xml'"};
+    return 0;
+  }
+  catch (std::exception& x) {
+    std::cerr << "Exception: " << x.what() << '\n';
+  }
+  catch (...) {
+    std::cerr << "Unknown exception\n";
   }
 
-  auto root = doc.child(isoxml::Root);
-  if (!root) {
-    std::cerr << std::format("error: missing root <{}>\n", isoxml::Root);
-    return 1;
-  }
-
-  auto input = RootMeta{root};
-  std::cout << input.customers.size() << " customers\n"
-            << input.farms.size()     << " farms\n"
-            << input.fields.size()    << " fields\n"
-            << input.values.size()    << " values\n";
-
-  return 0;
+  return 1;
 } // main
 
