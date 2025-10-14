@@ -12,6 +12,8 @@
 #include "get_attr.hpp"
 
 #include <pugixml.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/core/cs.hpp>
 
 #include <unordered_map>
 #include <string>
@@ -25,6 +27,8 @@
 #include <exception>
 #include <utility>
 #include <cstdint>
+
+namespace ggl = boost::geometry;
 
 // ---------------------------------------------------------------------
 // ISOXML constants (centralized so parse/write share the same strings).
@@ -164,23 +168,17 @@ void Farm::dump(XmlNode node) const {
 } // Farm::dump
 
 using Angle = double;
-
-struct LatLon {
-  Angle latitude  = Angle{};
-  Angle longitude = Angle{};
-  LatLon() = default;
-  LatLon(Angle lat, Angle lon);
-}; // LatLon
-
-LatLon::LatLon(Angle lat, Angle lon)
-  : latitude{lat}, longitude{lon}
-{
+using LonLat = ggl::model::point<Angle, 2, ggl::cs::geographic<ggl::degree>>;
+Angle Latitude (const LonLat& ll) { return ggl::get<1>(ll); }
+Angle Longitude(const LonLat& ll) { return ggl::get<0>(ll); }
+LonLat LatLon(double lat, double lon) {
   if ( lat <  -90.0 || lat >  +90.0
     || lon < -180.0 || lon > +180.0)
   {
     auto msg = std::format("LatLong: invalid ({}, {})", lat, lon);
     throw std::range_error{msg};
   }
+  return LonLat{lon, lat};
 } // LatLon::ctor
 
 struct Point {
@@ -192,11 +190,13 @@ struct Point {
       Type::Storage, Type::Obstacle, Type::GuideA, Type::GuideB,
       Type::GuideCenter, Type::GuidePoint, Type::Field, Type::Base>;
   Type type;
-  LatLon point;
+  LonLat point;
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   using TypeValidator = std::function<bool(Type)>;
   static constexpr bool AnyType(Type) { return true; }
   Point() = default;
+  explicit Point(const LonLat& lonlat, Type type_ = Type::Other)
+    : type{type_}, point{lonlat} { }
   explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
   void dump(XmlNode x) const;
 }; // Point
@@ -224,8 +224,8 @@ template<> struct EnumValues<Point::Type>: Point::Types { };
 
 Point::Point(const XmlNode& x, TypeValidator validator)
   : type{ RequireAttr<Type >(x, "A")}
-  , point{RequireAttr<Angle>(x, "C"),
-          RequireAttr<Angle>(x, "D")}
+  , point{LatLon(RequireAttr<Angle>(x, "C"),
+                 RequireAttr<Angle>(x, "D"))}
 {
   for (const auto& a: x.attributes()) {
     auto k = tjg::name(a);
@@ -243,8 +243,8 @@ Point::Point(const XmlNode& x, TypeValidator validator)
 void Point::dump(XmlNode x) const {
   x.set_name("PNT");
   x.append_attribute("A") = static_cast<int>(type);
-  x.append_attribute("C") = point.latitude;
-  x.append_attribute("D") = point.longitude;
+  x.append_attribute("C") = Latitude(point);
+  x.append_attribute("D") = Longitude(point);
   for (const auto& [k, v]: otherAttrs)
     x.append_attribute(k) = v;
 } // Point::dump
@@ -272,6 +272,15 @@ struct LineString { // LSG
   std::size_t size() const { return points.size(); }
 
   LineString() = default;
+  LineString(Type type_, Point::Type ptType, const std::vector<LonLat>& pts)
+    : type{type_}
+  {
+    points.reserve(pts.size());
+    for (const auto& p: pts)
+      points.emplace_back(p, ptType);
+  }
+
+  LineString(Type type, std::vector<LonLat> pts);
   explicit LineString(const XmlNode& x,
                       Point::TypeValidator point_validator=Point::AnyType);
   void dump(XmlNode node) const;
