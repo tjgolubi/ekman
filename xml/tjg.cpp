@@ -20,6 +20,7 @@
 #include <utility>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 
 // ---------------------------------------------------------------------
 // ISOXML constants (centralized so parse/write share the same strings).
@@ -71,6 +72,7 @@ struct Field {
   std::string name;
   std::string ctrId;
   std::string frmId;
+  unsigned area;
   // Minimal geometry stats for a quick sanity print.
   int polygonCount = 0;
   int ringCount    = 0; // LSG
@@ -106,11 +108,7 @@ void ErrorRef(const char *elem, const char *msg)
 RootMeta ParseRootMeta(const pugi::xml_node &root) {
   RootMeta m;
   for (const auto& a : root.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (     std::strcmp(k, isoxml::root_attr::VersionMajor) == 0)
       m.versionMajor       = tjg::get_attr<int>(a);
     else if (std::strcmp(k, isoxml::root_attr::VersionMinor) == 0)
@@ -135,11 +133,7 @@ void ParseCtr(const pugi::xml_node &n, Model &out) {
   auto custId   = std::optional<std::string>{};
   auto custName = std::optional<std::string>{};
   for (const auto& a : n.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (     std::strcmp(k, "A") == 0)
       custId   = tjg::get_attr<std::string>(a);
     else if (std::strcmp(k, "B") == 0)
@@ -169,11 +163,7 @@ void ParseFrm(const pugi::xml_node &n, Model &out) {
   auto farmName = std::optional<std::string>();
 
   for (const auto& a : n.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (     std::strcmp(k, "A") == 0)
       farmId   = tjg::get_attr<std::string>(a);
     else if (std::strcmp(k, "B") == 0)
@@ -208,22 +198,16 @@ void ParseFrm(const pugi::xml_node &n, Model &out) {
 void ParsePnt(const pugi::xml_node &pnt, Field &F) {
   ++F.pointCount;
   for (const auto& a : pnt.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (   std::strcmp(k, "A") && std::strcmp(k, "B")
         && std::strcmp(k, "C") && std::strcmp(k, "D")) {
       WarnUnknownAttr(isoxml::PNT, k);
     }
   }
   for (const auto& c : pnt.children()) {
-    if (!c)
-      break;
+    if (c.type() != pugi::node_element)
+      continue;
     const auto k = c.name();
-    if (!k || !k[0])
-      break;
     WarnUnknownElem(isoxml::PNT, k);
   }
 } // ParsePnt
@@ -233,23 +217,16 @@ void ParsePnt(const pugi::xml_node &pnt, Field &F) {
 void ParseLsg(const pugi::xml_node &lsg, Field &F) {
   ++F.ringCount;
   for (const auto& a : lsg.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (   std::strcmp(k, "A") && std::strcmp(k, "B")
         && std::strcmp(k, "C") && std::strcmp(k, "D")) {
       WarnUnknownAttr(isoxml::LSG, k);
     }
   }
   for (const auto& c : lsg.children()) {
-    if (!c)
-      break;
+    if (c.type() != pugi::node_element)
+      continue;
     const auto k = c.name();
-    if (!k || !k[0])
-      break;
-    // std::printf("TJG '%s'\n", k);
     if (std::strcmp(k, isoxml::PNT) != 0) {
       WarnUnknownElem(isoxml::LSG, k);
       continue;
@@ -263,20 +240,14 @@ void ParseLsg(const pugi::xml_node &lsg, Field &F) {
 void ParsePln(const pugi::xml_node &pln, Field &F) {
   ++F.polygonCount;
   for (const auto& a : pln.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (std::strcmp(k, "A") && std::strcmp(k, "B"))
       WarnUnknownAttr(isoxml::PLN, k);
   }
   for (const auto& c : pln.children()) {
-    if (!c)
-      break;
+    if (c.type() != pugi::node_element)
+      continue;
     const auto k = c.name();
-    if (!k || !k[0])
-      break;
     if (std::strcmp(k, isoxml::LSG) != 0) {
       WarnUnknownElem(isoxml::PLN, k);
       continue;
@@ -292,18 +263,17 @@ void ParsePfd(const pugi::xml_node &n, Model &out) {
   auto fieldName = std::optional<std::string>{};
   auto ctrId     = std::optional<std::string>{};
   auto frmId     = std::optional<std::string>{};
+  auto fieldArea = std::optional<std::uint32_t>{};
 
   // Attributes (A,C,E,F)
   for (const auto& a : n.attributes()) {
-    if (!a)
-      break;
     const auto k = a.name();
-    if (!k || !k[0])
-      break;
     if (     std::strcmp(k, "A") == 0)
       fieldId   = tjg::get_attr<std::string>(a);
     else if (std::strcmp(k, "C") == 0)
       fieldName = tjg::get_attr<std::string>(a);
+    else if (std::strcmp(k, "D") == 0)
+      fieldArea = tjg::get_attr<std::uint32_t>(a);
     else if (std::strcmp(k, "E") == 0)
       ctrId     = tjg::get_attr<std::string>(a);
     else if (std::strcmp(k, "F") == 0)
@@ -315,6 +285,7 @@ void ParsePfd(const pugi::xml_node &n, Model &out) {
   bool ok = true;
   if (!fieldId  ) { ErrorMissing("PFD", "A"); ok = false; }
   if (!fieldName) { ErrorMissing("PFD", "B"); ok = false; }
+  if (!fieldArea) { ErrorMissing("PFD", "D"); ok = false; }
   if (!ctrId    ) { ErrorMissing("PFD", "E"); ok = false; }
   if (!frmId    ) { ErrorMissing("PFD", "F"); ok = false; }
   if (!ok) return;
@@ -324,14 +295,15 @@ void ParsePfd(const pugi::xml_node &n, Model &out) {
   f.name  = std::move(*fieldName);
   f.ctrId = std::move(*ctrId);
   f.frmId = std::move(*frmId);
+  f.area  = *fieldArea;
+
+  if (f.area != 0) ErrorRef("PFD", "@D!=0");
 
   // Children in doc order. We only count PLN/LSG/PNT; warn for others.
   for (const auto& c : n.children()) {
-    if (!c)
-      break;
+    if (c.type() != pugi::node_element)
+      continue;
     const auto k = c.name();
-    if (!k || !k[0])
-      break;
     if (std::strcmp(k, isoxml::PLN) != 0) {
       WarnUnknownElem("PFD", k);
       continue;
@@ -402,18 +374,16 @@ int main(int argc, const char *argv[]) {
   model.root = ParseRootMeta(root);
 
   // Walk children in file order. Dispatch on name via strcmp.
-  for (const auto& n : root.children()) {
-    if (!n)
-      break;
-    const auto k = n.name();
-    if (!k || !k[0])
-      break;
+  for (const auto& c : root.children()) {
+    if (c.type() != pugi::node_element)
+      continue;
+    const auto k = c.name();
     if (     std::strcmp(k, isoxml::CTR) == 0)
-      ParseCtr(n, model);
+      ParseCtr(c, model);
     else if (std::strcmp(k, isoxml::FRM) == 0)
-      ParseFrm(n, model);
+      ParseFrm(c, model);
     else if (std::strcmp(k, isoxml::PFD) == 0)
-      ParsePfd(n, model);
+      ParsePfd(c, model);
     else
       WarnUnknownElem(isoxml::Root, k);
   }

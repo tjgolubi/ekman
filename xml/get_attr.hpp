@@ -103,6 +103,7 @@ inline std::optional<T> get_opt_attr(const pugi::xml_attribute& a) noexcept {
         switch (*++s) {
           case 'x': case 'X': ++s; base = 16; break;
           case 'b': case 'B': ++s; base =  2; break;
+          case '\0': return T{0};
           default: base = 8; break;
         }
       }
@@ -137,8 +138,9 @@ inline std::optional<T> get_opt_attr(const pugi::xml_attribute& a) noexcept {
 
 template<typename T>
 inline T get_attr(const pugi::xml_attribute& a) {
+  if (!a) throw std::runtime_error{"get_attr: empty attribute"};
   auto v = get_opt_attr<T>(a);
-  if (!v) throw std::runtime_error{"get_attr: empty attribute"};
+  if (!v) throw std::runtime_error{"get_attr: invalid attribute"};
   return *v;
 }
 
