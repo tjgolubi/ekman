@@ -17,16 +17,19 @@ XML  :=$(APP)/pugixml
 FIELD_XML_E=field_xml.$E
 SWATH_XML_E=swath_xml.$E
 TJG_XML_E=tjg_xml.$E
+TJG_E=tjg.$E
 
 TGT1=$(FIELD_XML_E)
 TGT2=$(SWATH_XML_E)
 TGT3=$(TJG_XML_E)
-TARGETS=$(TGT1) $(TGT2) $(TGT3)
+TGT4=$(TJG_E)
+TARGETS=$(TGT1) $(TGT2) $(TGT3) $(TGT4)
 
 SRC1:=field_xml.cpp
 SRC2:=swath_xml.cpp
 SRC3:=tjg_xml.cpp
-SOURCE:=$(SRC1) $(SRC2) $(SRC3)
+SRC4:=tjg.cpp
+SOURCE:=$(SRC1) $(SRC2) $(SRC3) $(SRC4)
 
 SYSINCL:=$(XML)/src $(BOOST) $(addsuffix /include, $(UNITS)/core $(UNITS)/systems $(GSL))
 INCLUDE:=$(PROJDIR)
@@ -54,4 +57,7 @@ $(TGT2): $(OBJ2) $(LIBS)
         $(LINK)
 
 $(TGT3): $(OBJ3) $(LIBS)
+        $(LINK)
+
+$(TGT4): $(OBJ4) $(LIBS)
         $(LINK)
