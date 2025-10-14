@@ -1,7 +1,7 @@
 // taskdata_parse.cpp
 //
 // Build (example):
-//   g++ -std=gnu++23 -O2 -Wall -Wextra -pedantic \
+//   g++ -std=gnu++23 -O2 -Wall -Wextra -pedantic
 //       taskdata_parse.cpp -lpugixml -o taskdata_parse
 //
 // Run:
