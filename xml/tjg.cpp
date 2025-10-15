@@ -13,9 +13,16 @@
 
 #include <pugixml.hpp>
 #include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/geometries/linestring.hpp>
+#include <boost/geometry/geometries/multi_linestring.hpp>
+#include <boost/geometry/geometries/polygon.hpp>
+#include <boost/geometry/geometries/ring.hpp>
+#include <boost/geometry/algorithms/correct.hpp>
+#include <boost/geometry/algorithms/is_valid.hpp>
 #include <boost/geometry/core/cs.hpp>
 
 #include <unordered_map>
+#include <regex>
 #include <string>
 #include <vector>
 #include <string_view>
@@ -29,26 +36,37 @@
 #include <cstdint>
 
 namespace ggl = boost::geometry;
+using GeoPoint = ggl::model::point<double, 2, ggl::cs::geographic<ggl::degree>>;
+using GeoLineString = ggl::model::linestring<GeoPoint>;
+using GeoPolyLine   = ggl::model::multi_linestring<GeoLineString>;
+using GeoRing       = ggl::model::ring<GeoPoint, true >;
+using GeoHole       = ggl::model::ring<GeoPoint, false>;
+using GeoPolygon    = ggl::model::polygon<GeoPoint>;
 
 // ---------------------------------------------------------------------
 // ISOXML constants (centralized so parse/write share the same strings).
 namespace isoxml {
 
-inline constexpr char Root[] = "ISO11783_TaskData";
-inline constexpr char CTR[]  = "CTR";
-inline constexpr char FRM[]  = "FRM";
-inline constexpr char PFD[]  = "PFD";
-inline constexpr char PLN[]  = "PLN";
-inline constexpr char LSG[]  = "LSG";
-inline constexpr char PNT[]  = "PNT";
+constexpr char Root[] = "ISO11783_TaskData";
+constexpr char CTR[]  = "CTR";
+constexpr char FRM[]  = "FRM";
+constexpr char PFD[]  = "PFD";
+constexpr char PLN[]  = "PLN";
+constexpr char LSG[]  = "LSG";
+constexpr char PNT[]  = "PNT";
+
+const auto CtrRe = std::regex{"CTR-?[0-9]+"};
+const auto FrmRe = std::regex{"FRM-?[0-9]+"};
+const auto PfdRe = std::regex{"PFD-?[0-9]+"};
+const auto GpnRe = std::regex{"GPN-?[0-9]+"};
+const auto GgpRe = std::regex{"GGP-?[0-9]+"};
 
 namespace root_attr {
-  inline constexpr char VersionMajor[]        = "VersionMajor";
-  inline constexpr char VersionMinor[]        = "VersionMinor";
-  inline constexpr char DataTransferOrigin[]  = "DataTransferOrigin";
-  inline constexpr char MgmtSoftwareManufacturer[] =
-                                              "ManagementSoftwareManufacturer";
-  inline constexpr char MgmtSoftwareVersion[] = "ManagementSoftwareVersion";
+  constexpr char VersionMajor[]        = "VersionMajor";
+  constexpr char VersionMinor[]        = "VersionMinor";
+  constexpr char DataTransferOrigin[]  = "DataTransferOrigin";
+  constexpr char MgmtSoftwareManufacturer[] = "ManagementSoftwareManufacturer";
+  constexpr char MgmtSoftwareVersion[] = "ManagementSoftwareVersion";
 } // root_attr
 
 } // isoxml
@@ -111,6 +129,12 @@ struct Customer {    // CTR
   std::string name;  // B
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   Customer() = default;
+  Customer(std::string_view id_, std::string_view name_)
+    : id{id_}, name{name_}
+  {
+    if (!std::regex_match(id, isoxml::CtrRe))
+      throw std::invalid_argument{"Customer: invalid id " + id};
+  }
   explicit Customer(const XmlNode& node);
   void dump(XmlNode node) const;
 }; // Customer
@@ -135,12 +159,18 @@ void Customer::dump(XmlNode node) const {
     node.append_attribute(k) = v;
 } // Customer::dump
 
-struct Farm {
-  std::string id;
-  std::string name;
-  std::string ctrId;
+struct Farm {           // FRM
+  std::string id;       // A
+  std::string name;     // B
+  std::string ctrId;    // I optional
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   Farm() = default;
+  Farm(std::string_view id_, std::string_view name_)
+    : id{id_}, name{name_}
+  {
+    if (!std::regex_match(id, isoxml::FrmRe))
+      throw std::invalid_argument{"Farm: invalid id: " + id};
+  }
   explicit Farm(const XmlNode& node);
   void dump(XmlNode node) const;
 }; // Farm
@@ -148,13 +178,13 @@ struct Farm {
 Farm::Farm(const XmlNode& node)
   : id   {RequireAttr<std::string>(node, "A")}
   , name {RequireAttr<std::string>(node, "B")}
-  , ctrId{RequireAttr<std::string>(node, "I")}
 {
   for (const auto& a: node.attributes()) {
     auto k = tjg::name(a);
-    if (k == "A" || k == "B" || k == "I")
+    if (k == "A" || k == "B")
       continue;
-    otherAttrs.emplace_back(a.name(), a.value());
+    if (k == "I") ctrId = tjg::get_attr<std::string>(a);
+    else otherAttrs.emplace_back(a.name(), a.value());
   }
 } // Farm::ctor
 
@@ -168,7 +198,7 @@ void Farm::dump(XmlNode node) const {
 } // Farm::dump
 
 using Angle = double;
-using LonLat = ggl::model::point<Angle, 2, ggl::cs::geographic<ggl::degree>>;
+using LonLat = GeoPoint;
 Angle Latitude (const LonLat& ll) { return ggl::get<1>(ll); }
 Angle Longitude(const LonLat& ll) { return ggl::get<0>(ll); }
 LonLat LatLon(double lat, double lon) {
@@ -194,9 +224,14 @@ struct Point {
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   using TypeValidator = std::function<bool(Type)>;
   static constexpr bool AnyType(Type) { return true; }
+  GeoPoint geo() const { return point; }
+  Angle latitude()  const { return Latitude(point);  }
+  Angle longitude() const { return Longitude(point); }
   Point() = default;
-  explicit Point(const LonLat& lonlat, Type type_ = Type::Other)
-    : type{type_}, point{lonlat} { }
+  Point(Angle lat, Angle lon, Type type_ = Type::Other)
+    : type{type_}, point{lon, lat} { }
+  explicit Point(const GeoPoint& geo_pt, Type type_ = Type::Other)
+    : type{type_}, point{geo_pt} { }
   explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
   void dump(XmlNode x) const;
 }; // Point
@@ -270,6 +305,34 @@ struct LineString { // LSG
 
   bool empty() const { return points.empty(); }
   std::size_t size() const { return points.size(); }
+
+  GeoLineString geo() const {
+    auto out = GeoLineString{};
+    out.reserve(points.size());
+    for (const auto& p: points)
+      out.emplace_back(p.geo());
+    return out;
+  } // geo
+
+  GeoRing ring() const {
+    auto ls = geo();
+    auto out = GeoRing{ls.begin(), ls.end()};
+    ggl::correct(out);
+    auto msg = std::string{};
+    if (!ggl::is_valid(out, msg))
+      throw std::runtime_error{"LineString::ring: not a ring: " + msg};
+    return out;
+  } // ring
+
+  GeoHole hole() const {
+    auto ls = geo();
+    auto out = GeoHole{ls.begin(), ls.end()};
+    ggl::correct(out);
+    auto msg = std::string{};
+    if (!ggl::is_valid(out, msg))
+      throw std::runtime_error{"LineString::hole: not a hole: " + msg};
+    return out;
+  } // hole
 
   LineString() = default;
   LineString(Type type_, Point::Type ptType, const std::vector<LonLat>& pts)
@@ -352,7 +415,20 @@ struct Polygon { // PLN
   std::vector<LineString> inners;
   std::vector<std::pair<std::string, std::string>> otherAttrs;
 
+  GeoPolygon geo() const {
+    auto out = GeoPolygon{};
+    out.outer() = outer.ring();
+    for (const auto& p: inners)
+      out.inners().emplace_back(p.ring());
+    ggl::correct(out);
+    auto msg = std::string{};
+    if (!ggl::is_valid(out, msg))
+      throw std::runtime_error{"Polygon::geo: invalid polygon: " + msg};
+    return out;
+  } // geo
+
   Polygon() = default;
+  explicit Polygon(const GeoPolygon& poly, Type type_ = Type::Boundary);
   explicit Polygon(const XmlNode& x);
   void dump(XmlNode node) const;
 }; // Polygon
@@ -378,6 +454,16 @@ constexpr const char* Name(Polygon::Type x) noexcept {
 namespace tjg {
 template<> struct EnumValues<Polygon::Type>: Polygon::Types { };
 } // tjg
+
+Polygon::Polygon(const GeoPolygon& poly, Type type_)
+  : type{type_}
+  , outer{LineString::Type::Exterior, Point::Type::Field, poly.outer()}
+  , inners{}
+{
+  inners.reserve(poly.inners().size());
+  for (const auto& r: poly.inners())
+    inners.emplace_back(LineString::Type::Interior, Point::Type::Field, r);
+}
 
 Polygon::Polygon(const XmlNode& x)
   : type{RequireAttr<int>(x, "A")}
@@ -452,7 +538,7 @@ struct Swath { // GPN
       Method::DGNSS, Method::PreciseGNSS, Method::RtkInt, Method::RtkFloat,
       Method::DR, Method::Manual, Method::Sim, Method::PC, Method::Other>;
   std::string id;
-  std::string name;
+  std::string name;       // optional
   Type type;
   std::optional<Option>    option;
   std::optional<Direction> direction;
@@ -469,7 +555,35 @@ struct Swath { // GPN
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   std::vector<LineString> paths;
   std::vector<Polygon> boundaries;
+  void push(const GeoLineString& path) {
+    if (path.empty())
+      return;
+    auto ls = LineString{LineString::Type::Guidance, Point::Type::GuidePoint,
+                         path};
+    if (ls.size() > 1) {
+      ls.points.front().type = Point::Type::GuideA;
+      ls.points.back() .type = Point::Type::GuideB;
+    }
+    paths.emplace_back(std::move(ls));
+  }
   Swath() = default;
+  explicit Swath(std::string_view id_, Type type_ = Type::Curve)
+    : id{id_}, type{type_}
+  {
+    if (!std::regex_match(id, isoxml::GpnRe))
+      throw std::invalid_argument{"Swath: invalid id: " + id};
+  }
+
+  Swath(std::string_view id_, const GeoPolyLine& lines, Type type_=Type::Curve)
+    : Swath{id_, type_}
+  {
+    for (const auto& l: lines)
+      push(l);
+  }
+
+  Swath(std::string_view id_, const GeoLineString& ls, Type type_=Type::Curve)
+    : Swath{id_, type_}
+    { push(ls); }
   explicit Swath(const XmlNode& node);
   void dump(XmlNode node) const;
 }; // Swath
@@ -541,14 +655,14 @@ template<> struct EnumValues<Swath::Method>   : Swath::MethodList    { };
 
 Swath::Swath(const XmlNode& node)
   : id  {RequireAttr<std::string>(node, "A")}
-  , name{RequireAttr<std::string>(node, "B")}
   , type{RequireAttr<Type>(node, "C")}
 {
   for (const auto& a: node.attributes()) {
     auto k = tjg::name(a);
-    if (k == "A" || k == "B" || k == "C")
+    if (k == "A" || k == "C")
       continue;
-    if      (k == "D") option    = tjg::get_attr<Option>(a);
+    if      (k == "B") name      = tjg::get_attr<std::string>(a);
+    else if (k == "D") option    = tjg::get_attr<Option>(a);
     else if (k == "E") direction = tjg::get_attr<Direction>(a);
     else if (k == "F") extension = tjg::get_attr<Extension>(a);
     else if (k == "G") heading   = tjg::get_attr<Angle>(a);
@@ -575,7 +689,7 @@ Swath::Swath(const XmlNode& node)
 void Swath::dump(XmlNode node) const {
   node.set_name("GPN");
   node.append_attribute("A") = id;
-  node.append_attribute("B") = name;
+  if (!name.empty()) node.append_attribute("B") = name;
   node.append_attribute("C") = static_cast<int>(type);
   if (option)    node.append_attribute("D") = static_cast<int>(*option);
   if (direction) node.append_attribute("E") = static_cast<int>(*direction);
@@ -603,10 +717,16 @@ void Swath::dump(XmlNode node) const {
 
 struct Guide {      // GGP
   std::string id;   // A
-  std::string name; // B
+  std::string name; // B optional
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   std::vector<Swath> swaths;
   Guide() = default;
+  explicit Guide(std::string_view id_, std::string_view name_="")
+    : id{id_}, name{name_}
+  {
+    if (!std::regex_match(id, isoxml::GgpRe))
+      throw std::invalid_argument{"Guide: invalid id: " + id};
+  }
   Guide(const XmlNode& node);
   void dump(XmlNode node) const;
 }; // Guide
@@ -636,7 +756,7 @@ Guide::Guide(const XmlNode& node)
 void Guide::dump(XmlNode node) const {
   node.set_name("GGP");
   node.append_attribute("A") = id;
-  node.append_attribute("B") = name;
+  if (!name.empty()) node.append_attribute("B") = name;
   for (const auto& [k, v]: otherAttrs)
     node.append_attribute(k) = v;
   for (const auto& s: swaths)
@@ -645,14 +765,21 @@ void Guide::dump(XmlNode node) const {
 
 struct Field { // PFD
   std::string id;     // A
+  std::string code;   // B optional
   std::string name;   // C
   unsigned area;      // D
-  std::string ctrId;  // E
-  std::string frmId;  // F
+  std::string ctrId;  // E optional
+  std::string frmId;  // F optional
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   std::vector<Polygon> parts;
   std::vector<Guide> guides;
   Field() = default;
+  Field(std::string_view id_, std::string_view name_="", unsigned area_=0)
+    : id{id_}, name{name_}, area{area_}
+  {
+    if (!std::regex_match(id, isoxml::PfdRe))
+      throw std::invalid_argument{"Field: invalid id: " + id};
+  }
   explicit Field(const XmlNode& x);
   void dump(XmlNode x) const;
 }; // Field
@@ -661,14 +788,15 @@ Field::Field(const XmlNode& x)
   : id   {RequireAttr<std::string>(x, "A")}
   , name {RequireAttr<std::string>(x, "C")}
   , area {RequireAttr<unsigned>   (x, "D")}
-  , ctrId{RequireAttr<std::string>(x, "E")}
-  , frmId{RequireAttr<std::string>(x, "F")}
 {
   for (const auto& a: x.attributes()) {
     auto k = tjg::name(a);
-    if (k == "A" || k == "C" || k == "D" || k == "E" || k == "F")
+    if (k == "A" || k == "C" || k == "D")
       continue;
-    otherAttrs.emplace_back(k, a.value());
+    if      (k == "B") code  = tjg::get_attr<std::string>(a);
+    else if (k == "E") ctrId = tjg::get_attr<std::string>(a);
+    else if (k == "F") frmId = tjg::get_attr<std::string>(a);
+    else otherAttrs.emplace_back(k, a.value());
   }
   for (const auto& c: x.children()) {
     if (c.type() != pugi::node_element)
@@ -683,10 +811,11 @@ Field::Field(const XmlNode& x)
 void Field::dump(XmlNode node) const {
   node.set_name("PFD");
   node.append_attribute("A") = id;
+  if (!code.empty()) node.append_attribute("B") = code;
   node.append_attribute("C") = name;
   node.append_attribute("D") = area;
-  node.append_attribute("E") = ctrId;
-  node.append_attribute("F") = frmId;
+  if (!ctrId.empty()) node.append_attribute("E") = ctrId;
+  if (!frmId.empty()) node.append_attribute("F") = frmId;
   for (const auto& [k, v]: otherAttrs)
     node.append_attribute(k) = v;
   for (const auto& p: parts)
@@ -735,17 +864,20 @@ void Value::dump(XmlNode node) const {
 } // Value::dump
 
 struct RootMeta {
-  int versionMajor       = -1;  // required
-  int versionMinor       = -1;  // required
+  int versionMajor       =  3;  // required
+  int versionMinor       =  0;  // required
   int dataTransferOrigin = -1;  // optional, -1 means "unset"
-  std::string mgmtManufacturer; // optional
-  std::string mgmtVersion;      // optional
+  std::string swVendor;         // optional
+  std::string swVersion;        // optional
   std::vector<std::pair<std::string,std::string>> otherAttrs;
   std::vector<Customer> customers;
   std::vector<Farm>     farms;
   std::vector<Field>    fields;
   std::vector<Value>    values;
   RootMeta() = default;
+  explicit RootMeta(std::string_view version)
+    : swVendor{"Ekman and Gober"}, swVersion{version}
+    { }
   RootMeta(const XmlNode& node);
   void dump(XmlNode node) const;
 }; // RootMeta
@@ -762,9 +894,9 @@ RootMeta::RootMeta(const XmlNode& node)
     if (k == isoxml::root_attr::DataTransferOrigin)
       dataTransferOrigin = tjg::get_attr<int>(a);
     else if (k == isoxml::root_attr::MgmtSoftwareManufacturer)
-      mgmtManufacturer   = tjg::get_attr<std::string>(a);
+      swVendor   = tjg::get_attr<std::string>(a);
     else if (k == isoxml::root_attr::MgmtSoftwareVersion)
-      mgmtVersion        = tjg::get_attr<std::string>(a);
+      swVersion        = tjg::get_attr<std::string>(a);
     else
       otherAttrs.emplace_back(k, a.value());
   }
@@ -796,9 +928,9 @@ void RootMeta::dump(XmlNode node) const {
                                                             dataTransferOrigin;
   }
   node.append_attribute(isoxml::root_attr::MgmtSoftwareManufacturer) =
-                                                            mgmtManufacturer;
+                                                            swVendor;
   node.append_attribute(isoxml::root_attr::MgmtSoftwareVersion) =
-                                                            mgmtVersion;
+                                                            swVersion;
   for (const auto& [k, v]: otherAttrs)
     node.append_attribute(k) = v;
   for (const auto& ctr: customers)
@@ -837,8 +969,8 @@ int main(int argc, const char *argv[]) {
               << top.fields.size()    << " fields\n"
               << top.values.size()    << " values\n";
 
-    top.mgmtManufacturer = "Terry Golubiewski";
-    top.mgmtVersion = "0.1 (alpha)";
+    top.swVendor = "Terry Golubiewski";
+    top.swVersion = "0.1 (alpha)";
 
     auto doc2 = pugi::xml_document{};
     auto root2 = doc2.append_child(isoxml::Root);
