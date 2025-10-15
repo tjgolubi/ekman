@@ -1,5 +1,6 @@
 /// @file
 /// @copyright 2025 Terry Golubiewski, all rights reserved.
+/// @author Terry Golubiewski
 ///
 /// Read XY perimeter (meters), build an inward inset path, detect "real" corners
 /// by simplifying the ORIGINAL perimeter (0.5 m DP), map those corners onto the
@@ -68,7 +69,10 @@ using Polygon  = bg::model::polygon<Pt>;
 using MP       = bg::model::multi_polygon<Polygon>;
 using Ring     = bg::model::ring<Pt>;
 
-using CornerVec = std::vector<gsl::index>;
+using CornerVec   = std::vector<gsl::index>;
+using PolyCorners = std::vector<CornerVec>;
+
+auto SimpOut = std::ofstream{};
 
 namespace Tune {
 
@@ -112,6 +116,12 @@ std::ostream& operator<<(std::ostream& os, const Pt& p)
 
 std::istream& operator>>(std::istream& os, Pt& p)
   { return os >> p.x >> p.y; }
+
+std::ostream& operator<<(std::ostream& os, const Ring& r) {
+  for (const auto& p: r)
+    os << p << '\n';
+  return os;
+}
 
 #if 0
 void EnsureValid(const Ring& ring, bool isInner) {
@@ -297,17 +307,44 @@ void WriteCorners(const Ring& ring, const CornerVec& corners,
 } // WriteCorners
 #endif
 
-void WriteCorners(const Polygon& poly, const std::vector<CornerVec>& allCorners,
-                  const fs::path& path = "corners.xy")
+void WriteCorners(std::ostream& out,
+                  const Polygon& poly, const PolyCorners& corners)
+{
+  gsl_Expects(corners.size() == 1 + poly.inners().size());
+  auto iter = corners.begin();
+  WriteCorners(out, poly.outer(), *iter);
+  for (const auto& r: poly.inners())
+    WriteCorners(out, r, *++iter);
+} // WriteCorners
+
+void WriteCorners(const fs::path& path,
+                  const Polygon& poly, const PolyCorners& allCorners)
 {
   auto out = std::ofstream{path, std::ios::binary};
   if (!out)
     throw std::runtime_error{"cannot open corners file: " + path.string()};
   out << std::fixed << std::setprecision(2);
-  auto cp = allCorners.begin();
-  WriteCorners(out, poly.outer(), *cp);
-  for (const auto& r: poly.inners())
-    WriteCorners(out, r, *++cp);
+  WriteCorners(out, poly, allCorners);
+  out.close();
+} // WriteCorners
+
+void WriteCorners(std::ostream& out,
+                  const MP& polys, const std::vector<PolyCorners>& mpCorners)
+{
+  gsl_Expects(mpCorners.size() == polys.size());
+  auto mp_iter = mpCorners.begin();
+  for (const auto& p: polys)
+    WriteCorners(out, p, *mp_iter++);
+} // WriteCorners
+
+void WriteCorners(const fs::path& path,
+                  const MP& polys, const std::vector<PolyCorners>& allCorners)
+{
+  auto out = std::ofstream{path, std::ios::binary};
+  if (!out)
+    throw std::runtime_error{"cannot open corners file: " + path.string()};
+  out << std::fixed << std::setprecision(2);
+  WriteCorners(out, polys, allCorners);
   out.close();
 } // WriteCorners
 
@@ -315,14 +352,14 @@ CornerVec FindCornersSimp(const Ring& ring) {
   gsl_Expects(ring.size() >= 3);
   gsl_Expects(ring.front() == ring.back());
   auto corners = CornerVec{};
-  const auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
+  const auto Theta = -geom::ToRadians(Tune::CornerAngleDeg).value();
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
   for (auto i = gsl::index{0}; i != n; ++i) {
     auto prev = curr;
     curr = ring[i+1] - ring[i];
     auto th  = curr.angle_wrt(prev);
-    if (std::abs(th.value()) >= Theta) corners.push_back(i);
+    if (th.value() <= Theta) corners.push_back(i);
   }
   return corners;
 } // FindCornersSimp
@@ -387,6 +424,7 @@ auto Simplify(const Geo& geo, Meters tolerance = Meters{1}) -> Geo {
 
 auto FindCorners(const Ring& ring) -> CornerVec {
   auto simp = Simplify(ring, Tune::SimplifyForCorners);
+  if (SimpOut) SimpOut << simp << '\n';
   auto simp_corners = FindCornersSimp(simp);
   auto corners = MapCornersToOriginal(ring, simp, simp_corners);
   return corners;
@@ -488,6 +526,21 @@ void Smooth(MP& mp) {
 } // Smooth multi-polygon
 #endif
 
+std::vector<CornerVec> FindCorners(Polygon& poly) {
+  auto allCorners = std::vector<CornerVec>{};
+  {
+    auto corners = FindCorners(poly.outer());
+    AdjustCorners(poly.outer(), corners);
+    allCorners.emplace_back(std::move(corners));
+  }
+  for (auto& r: poly.inners()) {
+    auto corners = FindCorners(r);
+    AdjustCorners(r, corners);
+    allCorners.emplace_back(std::move(corners));
+  }
+  return allCorners;
+} // FindCorners
+
 int main(int argc, const char* argv[]) {
   try {
     auto arg0 = fs::path{argv[0]};
@@ -498,6 +551,8 @@ int main(int argc, const char* argv[]) {
       return EXIT_FAILURE;
     }
 
+    SimpOut = std::ofstream{"simp.xy", std::ios::binary};
+
     const auto in_path  = fs::path{argv[1]};
     const auto offset   = Meters{std::stod(argv[2])}; // inward distance (m)
     const auto out_path = fs::path{argv[3]};
@@ -507,21 +562,20 @@ int main(int argc, const char* argv[]) {
     // ---- Read ORIGINAL perimeter and build polygon
     auto poly_in = ReadPolygon(in_path);
 
-    auto allCorners = std::vector<CornerVec>{};
-    {
-      auto corners = FindCorners(poly_in.outer());
-      AdjustCorners(poly_in.outer(), corners);
-      allCorners.emplace_back(std::move(corners));
-    }
-    for (auto& r: poly_in.inners()) {
-      auto corners = FindCorners(r);
-      AdjustCorners(r, corners);
-      allCorners.emplace_back(std::move(corners));
-    }
-    WriteCorners(poly_in, allCorners);
+    auto allCorners = FindCorners(poly_in); // Modifys poly_in.
+    WriteCorners("corners0.xy", poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
     auto mp_out = Simplify(inset, Tune::SimplifyOutputTol);
+
+    {
+      auto allPolyCorners = std::vector<PolyCorners>{};
+      for (auto& poly: mp_out) {
+        auto corners = FindCorners(poly); // Modifies poly
+        allPolyCorners.emplace_back(std::move(corners));
+      }
+      WriteCorners("corners.xy", mp_out, allPolyCorners);
+    }
 
     // Smooth(mp_out);
 

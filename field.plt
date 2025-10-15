@@ -17,4 +17,5 @@ plot "points.xy"  w lp pt 6 lc rgb "blue"  t "original", \
      "out.1.xy"   w lp pt 6 lc rgb "red"   t "inner1", \
      "out.2.xy"   w lp pt 6 lc rgb "red"   t "inner2", \
      "out.3.xy"   w lp pt 6 lc rgb "red"   t "inner3", \
+     "simp.xy"    w lp pt 6 lc rgb "purple" t "simp", \
      "corners.xy" u 1:2:(20.0) w circles lc rgb "orange" lw 2 fs empty t "corners"
