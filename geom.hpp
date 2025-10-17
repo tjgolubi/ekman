@@ -1,7 +1,8 @@
 #pragma once
 #include "Radians.hpp"
 
-#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/core/cs.hpp>
 
 #include <gsl-lite/gsl-lite.hpp>
 #include <numbers>

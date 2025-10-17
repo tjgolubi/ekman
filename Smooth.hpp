@@ -10,7 +10,8 @@
 
 #pragma once
 #include "geom.hpp"
-#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/ring.hpp>
+#include <boost/geometry/geometries/linestring.hpp>
 #include <gsl-lite/gsl-lite.hpp>
 
 boost::geometry::model::linestring<geom::Pt<double>>

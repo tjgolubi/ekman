@@ -5,6 +5,22 @@
 
 #include <mp-units/systems/si/unit_symbols.h>
 
+#include <boost/geometry/geometries/box.hpp>
+
+#include <boost/geometry/algorithms/is_valid.hpp>
+#include <boost/geometry/algorithms/correct.hpp>
+#include <boost/geometry/algorithms/simplify.hpp>
+#include <boost/geometry/algorithms/buffer.hpp>
+#include <boost/geometry/algorithms/envelope.hpp>
+#include <boost/geometry/algorithms/centroid.hpp>
+
+#include <boost/geometry/strategies/buffer/cartesian.hpp>
+#include <boost/geometry/strategies/agnostic/buffer_distance_symmetric.hpp>
+#include <boost/geometry/strategies/cartesian/buffer_side_straight.hpp>
+#include <boost/geometry/strategies/cartesian/buffer_join_round.hpp>
+#include <boost/geometry/strategies/cartesian/buffer_end_round.hpp>
+#include <boost/geometry/strategies/cartesian/buffer_point_circle.hpp>
+
 #include <boost/geometry/srs/projection.hpp>
 
 #include <gsl-lite/gsl-lite.hpp>
@@ -19,6 +35,9 @@ namespace gsl = gsl_lite;
 #include <limits>
 #include <cmath>
 #include <cstdlib>
+
+#include <iostream>
+#include <iomanip>
 
 namespace tjg {
 
@@ -245,46 +264,52 @@ template<> struct Xy<GeoPath>    { using type = Path; };
 template<> struct Xy<GeoPathVec> { using type = PathVec; };
 template<> struct Xy<GeoPolygon> { using type = Polygon; };
 
-template<class G>
-XyT<G> TransformToXy(const G& geo_in, const GeoPt& origin) {
-  using namespace ggl;
-  using namespace ggl::srs;
-  using namespace ggl::srs::dpar;
-
-  const auto origin_lat = ggl::get<1>(origin);
-  const auto origin_lon = ggl::get<0>(origin);
-  const projection<> proj = parameters<>(proj_aeqd)
-                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
-                            (x_0,0)(y_0,0)(units_m);
+template<class G, class Proj, typename CT>
+XyT<G> TransformToXy(const G& geo_in,
+                   const typename ggl::projections::projection<Proj, CT>& proj)
+{
   auto geo_out = XyT<G>{};
   proj.forward(geo_in, geo_out);
   return geo_out;
 } // TransformToXy
 
-template<class X>
-GeoT<X> TransformToGeo(const X& geo_in, const GeoPt& origin) {
-  using namespace ggl;
-  using namespace ggl::srs;
-  using namespace ggl::srs::dpar;
-
-  const auto origin_lat = ggl::get<1>(origin);
-  const auto origin_lon = ggl::get<0>(origin);
-  const projection<> proj = parameters<>(proj_aeqd)
-                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
-                            (x_0,0)(y_0,0)(units_m);
+template<class X, class Proj, typename CT>
+GeoT<X> TransformToGeo(const X& geo_in,
+                       const ggl::projections::projection<Proj, CT>& proj)
+{
   auto geo_out = GeoT<X>{};
   proj.inverse(geo_in, geo_out);
   return geo_out;
 } // TransformToGeo
 
+template<class Proj, typename CT>
 std::vector<GeoPathVec>
-TransformToGeo(const std::vector<PathVec>& in, const GeoPt& origin) {
+TransformToGeo(const std::vector<PathVec>& in,
+               const ggl::projections::projection<Proj, CT>& proj)
+{
   auto out = std::vector<GeoPathVec>{};
   out.reserve(in.size());
   for (const auto& pv: in)
-    out.emplace_back(TransformToGeo(pv, origin));
+    out.emplace_back(TransformToGeo(pv, proj));
   return out;
 } // TransformToGeo(vector<PathVec>)
+
+template<class Geo>
+auto MakeProjection(const Geo& geo) {
+  using namespace ggl;
+  using namespace ggl::srs;
+  using namespace ggl::srs::dpar;
+
+  using GeoBox = ggl::model::box<GeoPt>;
+  auto env = ggl::return_envelope<GeoBox>(geo);
+  auto origin = ggl::return_centroid<tjg::GeoPt>(env);
+  const auto origin_lat = ggl::get<1>(origin);
+  const auto origin_lon = ggl::get<0>(origin);
+  projection<> proj = parameters<>(proj_aeqd)
+                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
+                            (x_0,0)(y_0,0)(units_m);
+  return proj;
+} // MakeProjection
 
 } // detail
 
@@ -310,18 +335,10 @@ BoundarySwaths(const Polygon& poly_in, Distance offset, Distance simplifyTol) {
 std::vector<GeoPathVec>
 BoundarySwaths(const GeoPolygon& poly_in, Distance offset, Distance simplifyTol)
 {
-  auto box = ggl::model::box<GeoPt>{};
-  ggl::envelope(poly_in.outer(), box);
-  auto lon = ggl::get<0>(box.min_corner());
-  auto lat = ggl::get<1>(box.min_corner());
-  auto dLon = (ggl::get<0>(box.max_corner()) - lon) / 2;
-  auto dLat = (ggl::get<1>(box.max_corner()) - lat) / 2;
-  lon += dLon;
-  lat += dLat;
-  auto origin = GeoPt{lon, lat};
-  auto xyPoly = detail::TransformToXy(poly_in, origin);
+  const auto proj = detail::MakeProjection(poly_in);
+  auto xyPoly = detail::TransformToXy(poly_in, proj);
   auto xyOut  = BoundarySwaths(xyPoly, offset, simplifyTol);
-  return detail::TransformToGeo(xyOut, origin);
+  return detail::TransformToGeo(xyOut, proj);
 } // BoundarySwaths
 
 } // tjg

@@ -16,17 +16,20 @@ GSL  :=$(APP)/gsl-lite
 TJG_E=tjg.$E
 LEI_E=lei.$E
 TJG2_E=tjg2.$E
+TJG3_E=tjg3.$E
 
 TGT1=$(TJG_E)
 TGT2=$(LEI_E)
 TGT3=$(TJG2_E)
-TARGETS=$(TGT1) $(TGT2) $(TGT3)
+TGT4=$(TJG3_E)
+TARGETS=$(TGT1) $(TGT2) $(TGT3) $(TGT4)
 
 SRC1:=tjg.cpp Resample.cpp Smooth.cpp
 SRC2:=lei.cpp
 SRC3:=tjg2.cpp BoundarySwaths.cpp
+SRC4:=tjg3.cpp BoundarySwaths.cpp
 
-SOURCE:=$(SRC1) $(SRC2) $(SRC3)
+SOURCE:=$(SRC1) $(SRC2) $(SRC3) $(SRC4)
 
 SYSINCL:=$(BOOST) $(addsuffix /include, $(UNITS)/src/core $(GSL))
 INCLUDE:=$(PROJDIR)
@@ -54,4 +57,7 @@ $(TGT2): $(OBJ2) $(LIBS)
         $(LINK)
 
 $(TGT3): $(OBJ3) $(LIBS)
+        $(LINK)
+
+$(TGT4): $(OBJ4) $(LIBS)
         $(LINK)

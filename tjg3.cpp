@@ -1,8 +1,10 @@
 #include "BoundarySwaths.hpp"
 
 #include <mp-units/systems/si/unit_symbols.h>
+
 #include <boost/geometry/algorithms/is_valid.hpp>
 #include <boost/geometry/algorithms/correct.hpp>
+
 #include <boost/preprocessor/stringize.hpp>
 #include <gsl-lite/gsl-lite.hpp>
 namespace gsl = gsl_lite;
@@ -37,11 +39,27 @@ using Ring = ggl::model::ring<Pt>;
 
 namespace {
 
-std::ostream& operator<<(std::ostream& os, const tjg::Pt& p)
-  { return os << p.x << ' ' << p.y; }
+#if TJG_NOT_USED
+std::ostream& operator<<(std::ostream& out, const tjg::Pt& p)
+  { return out << p.x << ' ' << p.y; }
 
-std::istream& operator>>(std::istream& os, tjg::Pt& p)
-  { return os >> p.x >> p.y; }
+std::istream& operator>>(std::istream& in, tjg::Pt& p)
+  { return in >> p.x >> p.y; }
+#endif
+
+std::ostream& operator<<(std::ostream& out, const tjg::GeoPt& p) {
+  return out << ggl::get<1>(p) << ' ' << ggl::get<0>(p);
+}
+
+std::istream& operator>>(std::istream& in, tjg::GeoPt& p) {
+  double lat, lon;
+  in >> lat >> lon;
+  if (in) {
+    ggl::set<1>(p, lat);
+    ggl::set<0>(p, lon);
+  }
+  return in;
+}
 
 #ifdef TJG_NOT_USED
 std::ostream& operator<<(std::ostream& os, const tjg::Ring& r) {
@@ -62,14 +80,14 @@ void EnsureValid(const Geo& geo) {
   throw std::runtime_error{msg};
 } // EnsureValid
 
-tjg::Polygon ReadPolygon(const fs::path& path) {
+tjg::GeoPolygon ReadPolygon(const fs::path& path) {
   auto in = std::ifstream{path, std::ios::binary};
   if (!in) throw std::runtime_error{"cannot open input: " + path.string()};
-  auto poly = tjg::Polygon{};
+  auto poly = tjg::GeoPolygon{};
   auto* ring = &poly.outer();
   auto pts = std::vector<tjg::Pt>{};
   auto line = std::string{};
-  auto pt = tjg::Pt{};
+  auto pt = tjg::GeoPt{};
   while (getline(in, line)) {
     if (line.empty())
       continue;
@@ -90,7 +108,7 @@ tjg::Polygon ReadPolygon(const fs::path& path) {
 } // ReadPolygon
 
 // Writes all the swaths associated with a single polygon.
-void WriteSwath(const fs::path& path, const tjg::PathVec& swath) {
+void WriteSwath(const fs::path& path, const tjg::GeoPathVec& swath) {
   if (swath.empty())
     return;
   const auto ext = path.extension();
@@ -109,7 +127,7 @@ void WriteSwath(const fs::path& path, const tjg::PathVec& swath) {
 } // WriteSwath
 
 // Writes all swaths associated with a field.
-void WriteSwaths(const fs::path& path, const std::vector<tjg::PathVec>& swaths)
+void WriteSwaths(const fs::path& path, const std::vector<tjg::GeoPathVec>& swaths)
 {
   if (swaths.empty())
     return;
@@ -133,7 +151,7 @@ int main(int argc, const char* argv[]) {
 
     if (argc != 4) {
       std::cerr << "usage:\n" << arg0.string()
-        << "  <input.xy> <offset_m> <output.xy>\n";
+        << "  <input.wgs84> <offset_m> <output.wgs84>\n";
       return EXIT_FAILURE;
     }
 

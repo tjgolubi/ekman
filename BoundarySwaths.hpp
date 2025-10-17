@@ -12,6 +12,7 @@
 #include <boost/geometry/geometries/multi_linestring.hpp>
 #include <boost/geometry/geometries/linestring.hpp>
 #include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/core/cs.hpp>
 
 #include <vector>
 

@@ -1,6 +1,6 @@
 #pragma once
 #include "geom.hpp"
-#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/ring.hpp>
 #include <vector>
 
 /// Compute uniform-step deflection impulses along a closed ring.

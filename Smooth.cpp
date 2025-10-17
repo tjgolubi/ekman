@@ -19,7 +19,6 @@
 #include <boost/geometry/geometries/linestring.hpp>
 #include <boost/geometry/geometries/ring.hpp>
 #include <boost/geometry/algorithms/simplify.hpp>
-#include <boost/geometry.hpp>
 #include <gsl-lite/gsl-lite.hpp>
 namespace gsl = gsl_lite;
 #include <algorithm>

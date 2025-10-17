@@ -1,5 +1,6 @@
 *.wgs84
 *.xy
+out*.xml
 inset
 inset_bg
 save
