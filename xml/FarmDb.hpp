@@ -51,6 +51,7 @@ using Angle   = Degrees;
 struct LatLon {
   Angle latitude;
   Angle longitude;
+  LatLon() = default;
   LatLon(Angle lat_, Angle lon_) : latitude{lat_}, longitude(lon_) { }
 }; // LatLon
 
@@ -185,11 +186,11 @@ struct Swath { // GPN
   void dump(XmlNode& node) const;
 }; // Swath
 
-const char* Name(Swath::Type x) noexcept;
-const char* Name(Swath::Option x) noexcept;
+const char* Name(Swath::Type      x) noexcept;
+const char* Name(Swath::Option    x) noexcept;
 const char* Name(Swath::Direction x) noexcept;
 const char* Name(Swath::Extension x) noexcept;
-const char* Name(Swath::Method x) noexcept;
+const char* Name(Swath::Method    x) noexcept;
 
 struct Guide {      // GGP
   std::string id;   // A

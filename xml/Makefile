@@ -31,7 +31,7 @@ SRC1:=field_xml.cpp
 SRC2:=swath_xml.cpp
 SRC3:=tjg_xml.cpp
 SRC4:=tjg.cpp
-SRC5:=tjg2.cpp FarmDb.cpp
+SRC5:=tjg2.cpp FarmDb.cpp FarmGeo.cpp
 SOURCE:=$(SRC1) $(SRC2) $(SRC3) $(SRC4) $(SRC5)
 
 SYSINCL:=$(XML)/src $(BOOST) $(addsuffix /include, $(UNITS)/core $(UNITS)/systems $(GSL))

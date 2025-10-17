@@ -4,21 +4,10 @@
 
 #include <pugixml.hpp>
 
-#include <boost/geometry/geometries/point.hpp>
-#include <boost/geometry/geometries/linestring.hpp>
-#include <boost/geometry/geometries/multi_linestring.hpp>
-#include <boost/geometry/geometries/polygon.hpp>
-#include <boost/geometry/geometries/ring.hpp>
-#include <boost/geometry/algorithms/correct.hpp>
-#include <boost/geometry/algorithms/is_valid.hpp>
-#include <boost/geometry/core/cs.hpp>
-
-#include <unordered_map>
 #include <regex>
 #include <string>
 #include <vector>
 #include <string_view>
-#include <functional>
 #include <format>
 #include <iostream>
 #include <iomanip>
@@ -56,15 +45,6 @@ namespace root_attr {
 } // isoxml
 
 namespace farm_db {
-
-namespace ggl = boost::geometry;
-
-using GeoPoint = ggl::model::point<double, 2, ggl::cs::geographic<ggl::degree>>;
-using GeoLineString = ggl::model::linestring<GeoPoint>;
-using GeoPolyLine   = ggl::model::multi_linestring<GeoLineString>;
-using GeoRing       = ggl::model::ring<GeoPoint, true >;
-using GeoHole       = ggl::model::ring<GeoPoint, false>;
-using GeoPolygon    = ggl::model::polygon<GeoPoint>;
 
 [[noreturn]] void InvalidNode(const XmlNode& xml, std::string what) {
   auto k = tjg::name(xml);
@@ -217,36 +197,6 @@ void Point::dump(XmlNode& x) const {
     x.append_attribute(k) = v;
 } // Point::dump
 
-GeoPoint Geo(const Point& pt) { return GeoPoint{pt.longitude(), pt.latitude()}; }
-
-GeoLineString Geo(const LineString& lstr) {
-  auto out = GeoLineString{};
-  out.reserve(lstr.points.size());
-  for (const auto& p: lstr.points)
-    out.emplace_back(Geo(p));
-  return out;
-} // Geo(LineString)
-
-GeoRing MakeGeoRing(const LineString& lstr) {
-  auto ls = Geo(lstr);
-  auto out = GeoRing{ls.begin(), ls.end()};
-  ggl::correct(out);
-  auto msg = std::string{};
-  if (!ggl::is_valid(out, msg))
-    throw std::runtime_error{"LineString::ring: not a ring: " + msg};
-  return out;
-} // MakeGeoRing
-
-GeoHole MakeGeoHole(const LineString& lstr) {
-  auto ls = Geo(lstr);
-  auto out = GeoHole{ls.begin(), ls.end()};
-  ggl::correct(out);
-  auto msg = std::string{};
-  if (!ggl::is_valid(out, msg))
-    throw std::runtime_error{"LineString::hole: not a hole: " + msg};
-  return out;
-} // MakeGeoHole
-
 LineString::LineString(Type type_, Point::Type ptType, const Path& ring)
   : type{type_}
 {
@@ -302,18 +252,6 @@ void LineString::dump(XmlNode& node) const {
   }
 } // LineString::dump
 
-GeoPolygon Geo(const Polygon& poly) {
-  auto out = GeoPolygon{};
-  out.outer() = MakeGeoRing(poly.outer);
-  for (const auto& p: poly.inners)
-    out.inners().emplace_back(MakeGeoRing(p));
-  ggl::correct(out);
-  auto msg = std::string{};
-  if (!ggl::is_valid(out, msg))
-    throw std::runtime_error{"Geo(Polygon): invalid polygon: " + msg};
-  return out;
-} // Geo(Polygon)
-
 const char* Name(Polygon::Type x) noexcept {
   switch (x) {
     case Polygon::Type::Boundary:  return "Boundary";
@@ -331,24 +269,6 @@ const char* Name(Polygon::Type x) noexcept {
     default: return nullptr;
   }
 } // Name(Polygon::Type)
-
-LatLon UnGeo(const GeoPoint& pt) { return {ggl::get<1>(pt), ggl::get<0>(pt)}; }
-
-Path UnGeo(const GeoLineString& lstr) {
-  auto rval = Path{};
-  rval.reserve(lstr.size());
-  for (const auto& p: lstr)
-    rval.emplace_back(UnGeo(p));
-  return rval;
-}
-
-Path UnGeo(const GeoRing& ring) {
-  auto rval = Path{};
-  rval.reserve(ring.size());
-  for (const auto& p: ring)
-    rval.emplace_back(UnGeo(p));
-  return rval;
-}
 
 Polygon::Polygon(const Path& outer_, Type type_)
   : type{type_}
