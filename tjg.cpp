@@ -51,11 +51,6 @@ void DbgOut(const char* str, const T& x)
 namespace bg = boost::geometry;
 namespace fs = std::filesystem;
 
-using geom::Pi;
-using geom::TwoPi;
-using geom::DegPerRad;
-using geom::RadPerDeg;
-
 using Meters = double;
 using Degrees = double;
 
@@ -261,7 +256,7 @@ void WriteDeflections(std::ostream& out, const Ring& ring) {
   const auto deflections = MakeDeflections(ring, Meters{1});
   out << std::fixed << std::setprecision(2);
   for (auto d: deflections)
-    out << ToDegrees(d) << '\n';
+    out << d.degrees() << '\n';
 } // WriteDeflections
 
 void WriteDeflections(std::ostream& out, const Polygon& poly) {
@@ -317,6 +312,7 @@ void WriteCorners(std::ostream& out,
     WriteCorners(out, r, *++iter);
 } // WriteCorners
 
+#if 0
 void WriteCorners(const fs::path& path,
                   const Polygon& poly, const PolyCorners& allCorners)
 {
@@ -327,6 +323,7 @@ void WriteCorners(const fs::path& path,
   WriteCorners(out, poly, allCorners);
   out.close();
 } // WriteCorners
+#endif
 
 void WriteCorners(std::ostream& out,
                   const MP& polys, const std::vector<PolyCorners>& mpCorners)
@@ -352,14 +349,14 @@ CornerVec FindCornersSimp(const Ring& ring) {
   gsl_Expects(ring.size() >= 3);
   gsl_Expects(ring.front() == ring.back());
   auto corners = CornerVec{};
-  const auto Theta = -geom::ToRadians(Tune::CornerAngleDeg).value();
+  constexpr auto Theta = -geom::Radians::FromDegrees(Tune::CornerAngleDeg);
   auto n = std::ssize(ring) - 1;
   auto curr = ring[0] - ring[n-1];
   for (auto i = gsl::index{0}; i != n; ++i) {
     auto prev = curr;
     curr = ring[i+1] - ring[i];
     auto th  = curr.angle_wrt(prev);
-    if (th.value() <= Theta) corners.push_back(i);
+    if (th <= Theta) corners.push_back(i);
   }
   return corners;
 } // FindCornersSimp
@@ -562,8 +559,8 @@ int main(int argc, const char* argv[]) {
     // ---- Read ORIGINAL perimeter and build polygon
     auto poly_in = ReadPolygon(in_path);
 
-    auto allCorners = FindCorners(poly_in); // Modifys poly_in.
-    WriteCorners("corners0.xy", poly_in, allCorners);
+    //auto allCorners = FindCorners(poly_in); // Modifys poly_in.
+    //WriteCorners("corners0.xy", poly_in, allCorners);
 
     auto inset = ComputeInset(poly_in, offset);
     auto mp_out = Simplify(inset, Tune::SimplifyOutputTol);

@@ -1,11 +1,12 @@
 /// @file
 /// @copyright 2025 Terry Golubiewski, all rights reserved.
 /// @author Terry Golubiewski
+#include "BoundarySwaths.hpp"
 
-#include "geom.hpp"
+#include <mp-units/systems/si/unit_symbols.h>
 
-#include <boost/geometry.hpp>
-#include <boost/preprocessor/stringize.hpp>
+#include <boost/geometry/srs/projection.hpp>
+
 #include <gsl-lite/gsl-lite.hpp>
 namespace gsl = gsl_lite;
 
@@ -19,42 +20,26 @@ namespace gsl = gsl_lite;
 #include <cmath>
 #include <cstdlib>
 
-namespace ggl = boost::geometry;
+namespace tjg {
 
-using Meters  = double;
-using Degrees = double;
-
-using geom::Pi;
-using geom::TwoPi;
-using geom::DegPerRad;
-using geom::RadPerDeg;
-
-using Pt       = geom::Pt<Meters>;
 using Disp     = geom::Vec<Meters>;
-using Polygon  = ggl::model::polygon<Pt>;
 using MP       = ggl::model::multi_polygon<Polygon>;
 using Ring     = ggl::model::ring<Pt>;
-using GeoPt    = ggl::model::point<Degrees, ggl::cs::geographic<ggl::degree>>;
 
 using CornerVec   = std::vector<gsl::index>;
 using PolyCorners = std::vector<CornerVec>;
 
 namespace Tune {
 
-using namespace mp_units::unit_symbols;
-
 constexpr int CirclePoints = 32;
 
-constexpr auto SimplifyOutputTol  = Meters{0.10};
-
 // Douglas–Peucker for corner detection
-constexpr auto SimplifyForCorners = Meters{10.0};
-
-constexpr auto CornerAngleDeg     = Degrees{45.0};
+constexpr auto SimplifyForCorners = 10.0 * metre;
+constexpr Degrees CornerAngleDeg = 45.0;
 
 } // Tune
 
-namespace {
+namespace detail {
 
 template<class Geo>
 requires (!std::is_same_v<Geo, Ring>)
@@ -67,12 +52,12 @@ void EnsureValid(const Geo& geo) {
   throw std::runtime_error{msg};
 } // EnsureValid
 
-MP ComputeInset(const Polygon& in, Meters offset) {
+MP ComputeInset(const Polygon& in, Distance offset) {
   EnsureValid(in);
-  gsl_Expects(offset >= Meters{1.0});
+  gsl_Expects(offset >= 1.0 * metre);
 
   // ---- Inset buffer (negative distance) ----
-  auto distance = ggl::strategy::buffer::distance_symmetric<Meters>{-offset};
+  auto distance = ggl::strategy::buffer::distance_symmetric<Meters>{-offset.numerical_value_in(metre)};
   auto side     = ggl::strategy::buffer::side_straight{};
   auto join     = ggl::strategy::buffer::join_round{Tune::CirclePoints};
   auto end      = ggl::strategy::buffer::end_round{Tune::CirclePoints};
@@ -84,37 +69,13 @@ MP ComputeInset(const Polygon& in, Meters offset) {
   return inset;
 } // ComputeInset
 
-CornerVec FindCornersSimp(const Ring& ring) {
-  gsl_Expects(ring.size() >= 3);
-  gsl_Expects(ring.front() == ring.back());
-  auto corners = CornerVec{};
-  static constexpr auto Theta = geom::ToRadians(Tune::CornerAngleDeg).value();
-  auto n = std::ssize(ring) - 1;
-  auto curr = ring[0] - ring[n-1];
-  for (auto i = gsl::index{0}; i != n; ++i) {
-    auto prev = curr;
-    curr = ring[i+1] - ring[i];
-    auto th  = curr.angle_wrt(prev);
-    if (th <= -Theta) corners.push_back(i);
-  }
-  return corners;
-} // FindCornersSimp
-
-auto FindCorners(const Ring& ring) -> CornerVec {
-  auto simp = Simplify(ring, Tune::SimplifyForCorners);
-  if (SimpOut) SimpOut << simp << '\n';
-  auto simp_corners = FindCornersSimp(simp);
-  auto corners = MapCornersToOriginal(ring, simp, simp_corners);
-  return corners;
-} // FindCorners
-
 template<class Geo>
-Geo Simplify(const Geo& geo, Meters tolerance = Meters{1}) {
-  gsl_Expects(tolerance >= Meters{0.01});
+Geo Simplify(const Geo& geo, Distance tolerance) {
+  gsl_Expects(tolerance >= 0.01 * metre);
   auto simp = Geo{};
   auto failure = ggl::validity_failure_type{};
-  while (tolerance >= Meters{0.01}) {
-    ggl::simplify(geo, simp, tolerance);
+  while (tolerance >= 0.01 * metre) {
+    ggl::simplify(geo, simp, tolerance.numerical_value_in(metre));
     if (ggl::is_valid(simp, failure) || failure == ggl::failure_wrong_orientation)
       return simp;
     switch (failure) {
@@ -205,6 +166,29 @@ void AdjustCorners(Ring& ring, CornerVec& corners) {
   ring.push_back(ring.front()); // close ring
 } // AdjustCorners
 
+CornerVec FindCornersSimp(const Ring& ring) {
+  gsl_Expects(ring.size() >= 3);
+  gsl_Expects(ring.front() == ring.back());
+  auto corners = CornerVec{};
+  static constexpr auto Theta = geom::Radians::FromDegrees(Tune::CornerAngleDeg);
+  auto n = std::ssize(ring) - 1;
+  auto curr = ring[0] - ring[n-1];
+  for (auto i = gsl::index{0}; i != n; ++i) {
+    auto prev = curr;
+    curr = ring[i+1] - ring[i];
+    auto th  = curr.angle_wrt(prev);
+    if (th <= -Theta) corners.push_back(i);
+  }
+  return corners;
+} // FindCornersSimp
+
+auto FindCorners(const Ring& ring) -> CornerVec {
+  auto simp = Simplify(ring, Tune::SimplifyForCorners);
+  auto simp_corners = FindCornersSimp(simp);
+  auto corners = MapCornersToOriginal(ring, simp, simp_corners);
+  return corners;
+} // FindCorners
+
 std::vector<CornerVec> FindCorners(Polygon& poly) {
   auto allCorners = std::vector<CornerVec>{};
   {
@@ -220,76 +204,127 @@ std::vector<CornerVec> FindCorners(Polygon& poly) {
   return allCorners;
 } // FindCorners
 
-Polygon TransformToXy(const GeoPolygon& poly_in, const GeoPt& origin) {
-  using namespace ggl;
-  using namespace ggl::srs;
-  const auto origin_lat = ggl::get<1>(origin);
-  const auto origin_lon = ggl::get<0>(origin);
-  const projection<> proj = parameters<>(proj_aeqd)
-                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
-                            (x_0,0)(y_0,0)(units_m);
-  auto poly_out = Polygon{};
-  poly_out.reserve(poly_in.size());
-  prj.forward(poly_in, poly_out);
-  return poly_out;
-} // TransformToXy
-
-GeoPolygon TransformToGeo(const Polygon& poly_in, const GeoPt& origin) {
-  using namespace ggl;
-  using namespace ggl::srs;
-  const auto origin_lat = ggl::get<1>(origin);
-  const auto origin_lon = ggl::get<0>(origin);
-  const projection<> proj = parameters<>(proj_aeqd)
-                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
-                            (x_0,0)(y_0,0)(units_m);
-  auto poly_out = GeoPolygon{};
-  poly_out.reserve(poly_in.size());
-  prj.inverse(poly_in, poly_out);
-  return poly_out;
-} // TransformToGeo
-
-// std::vector<GeoLineString>
-GeoPolyLine ExtractSwaths(const Ring& ring, const CornerVec& corners) {
-  gslExpects(corners.size() > 1 && corners[0] == 0);
+PathVec ExtractSwaths(const Ring& ring, const CornerVec& corners) {
+  gsl_Expects(corners.size() > 1 && corners[0] == 0);
   const auto n = std::ssize(corners);
-  auto swaths = GeoPolyLine{};
+  auto swaths = PathVec{};
   swaths.reserve(corners.size());
-  auto first = ring.cbegin();
+  auto first = std::cbegin(ring);
   auto last  = first + corners[1];
-  swaths.emplace_back(first, last);
+  gsl_Expects(last != ring.end());
+  auto ptr = last;
+  if (ptr != ring.end())
+    ++ptr;
+  swaths.emplace_back(first, ptr);
   for (int i = gsl::index{1}; i != n-1; ++i) {
     first = last;
-    last  = ring.cbegin() + corners[i];
-    swaths.emplace_back{first, last};
+    auto idx = corners.at(i+1);
+    gsl_Expects(idx < ring.size());
+    last  = ring.cbegin() + idx;
+    gsl_Expects(last != ring.end());
+    ptr = last;
+    if (ptr != ring.end())
+      ++ptr;
+    swaths.emplace_back(first, ptr);
   }
-  swaths.emplace_back{last, ring.end()};
+  gsl_Expects(last != ring.end());
+  swaths.emplace_back(last, ring.end());
   return swaths;
 } // ExtractSwaths
 
-} // anonymous
+template<class XY> struct Geo { using type = void; };
+template<class G>  struct Xy  { using type = void; };
+template<class XY> using GeoT = Geo<std::remove_cv_t<XY>>::type;
+template<class G>  using XyT  =  Xy<std::remove_cv_t<G >>::type;
 
-std::vector<GeoPolyLine>
-BoundarySwaths(const GeoPolygon& poly_in,
-           const GeoPt& origin, Meters offset, Meters simplifyTol = Meter{0.10})
-{
-  if (offset < Meters{0.10})
-    throw std::runtime_error{"<offset_m> must be >= 10 cm"};
-  autp xyPoly = TransformToXy(poly_in);
-  // (void) FindCorners(xyPoly); // Modifys xyPoly.
-  auto inset = ComputeInset(xyPoly, offset);
-  auto inset_mp = Simplify(inset, Tune::SimplifyOutputTol);
-  auto linesVec = std::vector<GeoPolyLine>{};
-  for (auto& poly: inset_mp) {
-    auto cv = FindCorners(poly); // Modifies poly
-    gslExpects(std::ssize(cv) == 1 + std::ssize(poly.inners));
-    auto cp = std::begin(cv);
-    linesVec.emplace_bacK(ExtractSwaths(poly.outer(), *cp));
-    while (const auto& ring: poly.inners())
-      linesVec.emplace_bacK(ExtractSwaths(ring, *++cp));
-  }
-  auto out = std::vector<GeoPolyLine>{};
-  out.reserve(linesVec.size());
-  for (const auto& lines: linesVec)
-    out.emplace_back(TransformToGeo(lines));
+template<> struct Geo<Path>    { using type = GeoPath; };
+template<> struct Geo<PathVec> { using type = GeoPathVec; };
+template<> struct Geo<Polygon> { using type = GeoPolygon; };
+
+template<> struct Xy<GeoPath>    { using type = Path; };
+template<> struct Xy<GeoPathVec> { using type = PathVec; };
+template<> struct Xy<GeoPolygon> { using type = Polygon; };
+
+template<class G>
+XyT<G> TransformToXy(const G& geo_in, const GeoPt& origin) {
+  using namespace ggl;
+  using namespace ggl::srs;
+  using namespace ggl::srs::dpar;
+
+  const auto origin_lat = ggl::get<1>(origin);
+  const auto origin_lon = ggl::get<0>(origin);
+  const projection<> proj = parameters<>(proj_aeqd)
+                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
+                            (x_0,0)(y_0,0)(units_m);
+  auto geo_out = XyT<G>{};
+  proj.forward(geo_in, geo_out);
+  return geo_out;
+} // TransformToXy
+
+template<class X>
+GeoT<X> TransformToGeo(const X& geo_in, const GeoPt& origin) {
+  using namespace ggl;
+  using namespace ggl::srs;
+  using namespace ggl::srs::dpar;
+
+  const auto origin_lat = ggl::get<1>(origin);
+  const auto origin_lon = ggl::get<0>(origin);
+  const projection<> proj = parameters<>(proj_aeqd)
+                            (ellps_wgs84) (lat_0, origin_lat)(lon_0, origin_lon)
+                            (x_0,0)(y_0,0)(units_m);
+  auto geo_out = GeoT<X>{};
+  proj.inverse(geo_in, geo_out);
+  return geo_out;
+} // TransformToGeo
+
+std::vector<GeoPathVec>
+TransformToGeo(const std::vector<PathVec>& in, const GeoPt& origin) {
+  auto out = std::vector<GeoPathVec>{};
+  out.reserve(in.size());
+  for (const auto& pv: in)
+    out.emplace_back(TransformToGeo(pv, origin));
   return out;
+} // TransformToGeo(vector<PathVec>)
+
+} // detail
+
+std::vector<PathVec>
+BoundarySwaths(const Polygon& poly_in, Distance offset, Distance simplifyTol) {
+  if (offset < 0.10 * metre)
+    throw std::runtime_error{"<offset_m> must be >= 10 cm"};
+  // (void) FindCorners(poly_in); // Modifys poly_in.
+  auto inset_mp = detail::ComputeInset(poly_in, offset);
+  auto simp_mp  = detail::Simplify(inset_mp, simplifyTol);
+  auto linesVec = std::vector<PathVec>{};
+  for (auto& poly: simp_mp) {
+    auto cv = detail::FindCorners(poly); // Modifies poly
+    gsl_Expects(std::ssize(cv) == 1 + std::ssize(poly.inners()));
+    auto cp = std::begin(cv);
+    linesVec.emplace_back(detail::ExtractSwaths(poly.outer(), *cp));
+    for (const auto& ring: poly.inners())
+      linesVec.emplace_back(detail::ExtractSwaths(ring, *++cp));
+  }
+  return linesVec;
 } // BoundarySwaths
+
+std::vector<GeoPathVec>
+BoundarySwaths(const GeoPolygon& poly_in, Distance offset, Distance simplifyTol)
+{
+  auto box = ggl::model::box<GeoPt>{};
+  ggl::envelope(poly_in.outer(), box);
+  auto lon = ggl::get<0>(box.min_corner());
+  auto lat = ggl::get<1>(box.min_corner());
+  auto dLon = (ggl::get<0>(box.max_corner()) - lon) / 2;
+  auto dLat = (ggl::get<1>(box.max_corner()) - lat) / 2;
+  lon += dLon;
+  lat += dLat;
+  auto origin = GeoPt{lon, lat};
+  auto xyPoly = detail::TransformToXy(poly_in, origin);
+  auto xyOut  = BoundarySwaths(xyPoly, offset, simplifyTol);
+  return detail::TransformToGeo(xyOut, origin);
+} // BoundarySwaths
+
+} // tjg
+
+// ============================================================================
+

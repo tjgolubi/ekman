@@ -15,23 +15,26 @@ GSL  :=$(APP)/gsl-lite
 # Must use "=" instead of ":=" because $E will be defined below.
 TJG_E=tjg.$E
 LEI_E=lei.$E
+TJG2_E=tjg2.$E
 
 TGT1=$(TJG_E)
 TGT2=$(LEI_E)
-TARGETS=$(TGT1) $(TGT2)
+TGT3=$(TJG2_E)
+TARGETS=$(TGT1) $(TGT2) $(TGT3)
 
 SRC1:=tjg.cpp Resample.cpp Smooth.cpp
 SRC2:=lei.cpp
+SRC3:=tjg2.cpp BoundarySwaths.cpp
 
-SOURCE:=$(SRC1) $(SRC2)
+SOURCE:=$(SRC1) $(SRC2) $(SRC3)
 
-SYSINCL:=$(BOOST) $(addsuffix /include, $(UNITS) $(GSL))
+SYSINCL:=$(BOOST) $(addsuffix /include, $(UNITS)/src/core $(GSL))
 INCLUDE:=$(PROJDIR)
 
 # Must use "=" because LIBS will be changed below.
 LIBS=
 
-#DEBUG=1
+DEBUG=1
 
 SHELL:=/bin/bash
 .SHELLFLAGS:=-eu -o pipefail -c
@@ -48,4 +51,7 @@ $(TGT1): $(OBJ1) $(LIBS)
         $(LINK)
 
 $(TGT2): $(OBJ2) $(LIBS)
+        $(LINK)
+
+$(TGT3): $(OBJ3) $(LIBS)
         $(LINK)

@@ -13,3 +13,5 @@ png/
 xy/
 tjg/
 *.exe
+/mp-units
+/geometry
