@@ -14,15 +14,18 @@ GSL  :=$(APP)/gsl-lite
 
 # Must use "=" instead of ":=" because $E will be defined below.
 TJG_E=tjg.$E
+LEI_E=lei.$E
 
 TGT1=$(TJG_E)
-TARGETS=$(TGT1)
+TGT2=$(LEI_E)
+TARGETS=$(TGT1) $(TGT2)
 
 SRC1:=tjg.cpp Resample.cpp Smooth.cpp
+SRC2:=lei.cpp
 
-SOURCE:=$(SRC1)
+SOURCE:=$(SRC1) $(SRC2)
 
-SYSINCL:=$(BOOST) $(addsuffix /include, $(UNITS)/core $(UNITS)/systems $(GSL))
+SYSINCL:=$(BOOST) $(addsuffix /include, $(UNITS) $(GSL))
 INCLUDE:=$(PROJDIR)
 
 # Must use "=" because LIBS will be changed below.
@@ -42,4 +45,7 @@ include $(SWDEV)/build.mk
 all: depend $(TARGETS)
 
 $(TGT1): $(OBJ1) $(LIBS)
+        $(LINK)
+
+$(TGT2): $(OBJ2) $(LIBS)
         $(LINK)

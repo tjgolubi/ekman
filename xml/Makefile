@@ -18,18 +18,21 @@ FIELD_XML_E=field_xml.$E
 SWATH_XML_E=swath_xml.$E
 TJG_XML_E=tjg_xml.$E
 TJG_E=tjg.$E
+TJG2_E=tjg2.$E
 
 TGT1=$(FIELD_XML_E)
 TGT2=$(SWATH_XML_E)
 TGT3=$(TJG_XML_E)
 TGT4=$(TJG_E)
-TARGETS=$(TGT1) $(TGT2) $(TGT3) $(TGT4)
+TGT5=$(TJG2_E)
+TARGETS=$(TGT1) $(TGT2) $(TGT3) $(TGT4) $(TGT5)
 
 SRC1:=field_xml.cpp
 SRC2:=swath_xml.cpp
 SRC3:=tjg_xml.cpp
 SRC4:=tjg.cpp
-SOURCE:=$(SRC1) $(SRC2) $(SRC3) $(SRC4)
+SRC5:=tjg2.cpp FarmDb.cpp
+SOURCE:=$(SRC1) $(SRC2) $(SRC3) $(SRC4) $(SRC5)
 
 SYSINCL:=$(XML)/src $(BOOST) $(addsuffix /include, $(UNITS)/core $(UNITS)/systems $(GSL))
 INCLUDE:=$(PROJDIR)
@@ -60,4 +63,7 @@ $(TGT3): $(OBJ3) $(LIBS)
         $(LINK)
 
 $(TGT4): $(OBJ4) $(LIBS)
+        $(LINK)
+
+$(TGT5): $(OBJ5) $(LIBS)
         $(LINK)

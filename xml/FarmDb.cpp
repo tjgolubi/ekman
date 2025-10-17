@@ -1,17 +1,9 @@
-// taskdata_parse.cpp
-//
-// Build (example):
-//   g++ -std=gnu++23 -O2 -Wall -Wextra -pedantic
-//       taskdata_parse.cpp -lpugixml -o taskdata_parse
-//
-// Run:
-//   ./taskdata_parse TASKDATA.XML
-//
-// Lines wrapped to <= 80 cols.
+#include "FarmDb.hpp"
 
 #include "get_attr.hpp"
 
 #include <pugixml.hpp>
+
 #include <boost/geometry/geometries/point.hpp>
 #include <boost/geometry/geometries/linestring.hpp>
 #include <boost/geometry/geometries/multi_linestring.hpp>
@@ -34,14 +26,6 @@
 #include <exception>
 #include <utility>
 #include <cstdint>
-
-namespace ggl = boost::geometry;
-using GeoPoint = ggl::model::point<double, 2, ggl::cs::geographic<ggl::degree>>;
-using GeoLineString = ggl::model::linestring<GeoPoint>;
-using GeoPolyLine   = ggl::model::multi_linestring<GeoLineString>;
-using GeoRing       = ggl::model::ring<GeoPoint, true >;
-using GeoHole       = ggl::model::ring<GeoPoint, false>;
-using GeoPolygon    = ggl::model::polygon<GeoPoint>;
 
 // ---------------------------------------------------------------------
 // ISOXML constants (centralized so parse/write share the same strings).
@@ -71,8 +55,7 @@ namespace root_attr {
 
 } // isoxml
 
-using XmlNode = pugi::xml_node;
-using XmlAttr = pugi::xml_attribute;
+namespace farm_db {
 
 [[noreturn]] void InvalidNode(const XmlNode& xml, std::string what) {
   auto k = tjg::name(xml);
@@ -124,20 +107,12 @@ T RequireAttr(const pugi::xml_node& x, const char* key) {
   InvalidAttr(x, key);
 } // RequireAttr
 
-struct Customer {    // CTR
-  std::string id;    // A
-  std::string name;  // B
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  Customer() = default;
-  Customer(std::string_view id_, std::string_view name_)
-    : id{id_}, name{name_}
-  {
-    if (!std::regex_match(id, isoxml::CtrRe))
-      throw std::invalid_argument{"Customer: invalid id " + id};
-  }
-  explicit Customer(const XmlNode& node);
-  void dump(XmlNode& node) const;
-}; // Customer
+Customer::Customer(std::string_view id_, std::string_view name_)
+  : id{id_}, name{name_}
+{
+  if (!std::regex_match(id, isoxml::CtrRe))
+    throw std::invalid_argument{"Customer: invalid id " + id};
+}
 
 Customer::Customer(const XmlNode& node)
   : id  {RequireAttr<std::string>(node, "A")}
@@ -159,21 +134,12 @@ void Customer::dump(XmlNode& node) const {
     node.append_attribute(k) = v;
 } // Customer::dump
 
-struct Farm {           // FRM
-  std::string id;       // A
-  std::string name;     // B
-  std::string ctrId;    // I optional
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  Farm() = default;
-  Farm(std::string_view id_, std::string_view name_)
-    : id{id_}, name{name_}
-  {
-    if (!std::regex_match(id, isoxml::FrmRe))
-      throw std::invalid_argument{"Farm: invalid id: " + id};
-  }
-  explicit Farm(const XmlNode& node);
-  void dump(XmlNode& node) const;
-}; // Farm
+Farm::Farm(std::string_view id_, std::string_view name_)
+  : id{id_}, name{name_}
+{
+  if (!std::regex_match(id, isoxml::FrmRe))
+    throw std::invalid_argument{"Farm: invalid id: " + id};
+}
 
 Farm::Farm(const XmlNode& node)
   : id   {RequireAttr<std::string>(node, "A")}
@@ -197,45 +163,6 @@ void Farm::dump(XmlNode& node) const {
     node.append_attribute(k) = v;
 } // Farm::dump
 
-using Angle = double;
-using LonLat = GeoPoint;
-Angle Latitude (const LonLat& ll) { return ggl::get<1>(ll); }
-Angle Longitude(const LonLat& ll) { return ggl::get<0>(ll); }
-LonLat LatLon(double lat, double lon) {
-  if ( lat <  -90.0 || lat >  +90.0
-    || lon < -180.0 || lon > +180.0)
-  {
-    auto msg = std::format("LatLong: invalid ({}, {})", lat, lon);
-    throw std::range_error{msg};
-  }
-  return LonLat{lon, lat};
-} // LatLon::ctor
-
-struct Point {
-  enum class Type {
-    Flag=1, Other, Access, Storage, Obstacle, GuideA, GuideB,
-    GuideCenter, GuidePoint, Field, Base
-  };
-  using Types = tjg::EnumList<Type, Type::Flag, Type::Other, Type::Access,
-      Type::Storage, Type::Obstacle, Type::GuideA, Type::GuideB,
-      Type::GuideCenter, Type::GuidePoint, Type::Field, Type::Base>;
-  Type type;
-  LonLat point;
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  using TypeValidator = std::function<bool(Type)>;
-  static constexpr bool AnyType(Type) { return true; }
-  GeoPoint geo() const { return point; }
-  Angle latitude()  const { return Latitude(point);  }
-  Angle longitude() const { return Longitude(point); }
-  Point() = default;
-  Point(Angle lat, Angle lon, Type type_ = Type::Other)
-    : type{type_}, point{lon, lat} { }
-  explicit Point(const GeoPoint& geo_pt, Type type_ = Type::Other)
-    : type{type_}, point{geo_pt} { }
-  explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
-  void dump(XmlNode& x) const;
-}; // Point
-
 const char* Name(Point::Type x) noexcept {
   switch (x) {
     case Point::Type::Flag:        return "Flag";
@@ -252,10 +179,6 @@ const char* Name(Point::Type x) noexcept {
     default: return nullptr;
   }
 } // Name(Type)
-
-namespace tjg {
-template<> struct EnumValues<Point::Type>: Point::Types { };
-} // tjg
 
 Point::Point(const XmlNode& x, TypeValidator validator)
   : type{ RequireAttr<Type >(x, "A")}
@@ -278,75 +201,47 @@ Point::Point(const XmlNode& x, TypeValidator validator)
 void Point::dump(XmlNode& x) const {
   x.set_name("PNT");
   x.append_attribute("A") = static_cast<int>(type);
-  x.append_attribute("C") = Latitude(point);
-  x.append_attribute("D") = Longitude(point);
+  x.append_attribute("C") = point.latitude;
+  x.append_attribute("D") = point.longitude;
   for (const auto& [k, v]: otherAttrs)
     x.append_attribute(k) = v;
 } // Point::dump
 
-struct LineString { // LSG
-  enum class Type {
-    Exterior=1,
-    Interior,
-    TramLine,
-    Sampling,
-    Guidance,
-    Drainage,
-    Fence,
-    Flag,
-    Obstacle
-  };
-  using Types = tjg::EnumList<Type, Type::Exterior, Type::Interior,
-      Type::TramLine, Type::Sampling, Type::Guidance, Type::Drainage,
-      Type::Fence, Type::Flag, Type::Obstacle>;
-  Type type;
-  std::vector<Point> points;
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
+GeoLineString LineString::geo() const {
+  auto out = GeoLineString{};
+  out.reserve(points.size());
+  for (const auto& p: points)
+    out.emplace_back(p.geo());
+  return out;
+} // geo
 
-  bool empty() const { return points.empty(); }
-  std::size_t size() const { return points.size(); }
+GeoRing LineString::ring() const {
+  auto ls = geo();
+  auto out = GeoRing{ls.begin(), ls.end()};
+  ggl::correct(out);
+  auto msg = std::string{};
+  if (!ggl::is_valid(out, msg))
+    throw std::runtime_error{"LineString::ring: not a ring: " + msg};
+  return out;
+} // ring
 
-  GeoLineString geo() const {
-    auto out = GeoLineString{};
-    out.reserve(points.size());
-    for (const auto& p: points)
-      out.emplace_back(p.geo());
-    return out;
-  } // geo
+GeoHole LineString::hole() const {
+  auto ls = geo();
+  auto out = GeoHole{ls.begin(), ls.end()};
+  ggl::correct(out);
+  auto msg = std::string{};
+  if (!ggl::is_valid(out, msg))
+    throw std::runtime_error{"LineString::hole: not a hole: " + msg};
+  return out;
+} // hole
 
-  GeoRing ring() const {
-    auto ls = geo();
-    auto out = GeoRing{ls.begin(), ls.end()};
-    ggl::correct(out);
-    auto msg = std::string{};
-    if (!ggl::is_valid(out, msg))
-      throw std::runtime_error{"LineString::ring: not a ring: " + msg};
-    return out;
-  } // ring
-
-  GeoHole hole() const {
-    auto ls = geo();
-    auto out = GeoHole{ls.begin(), ls.end()};
-    ggl::correct(out);
-    auto msg = std::string{};
-    if (!ggl::is_valid(out, msg))
-      throw std::runtime_error{"LineString::hole: not a hole: " + msg};
-    return out;
-  } // hole
-
-  LineString() = default;
-  LineString(Type type_, Point::Type ptType, const std::vector<LonLat>& pts)
-    : type{type_}
-  {
-    points.reserve(pts.size());
-    for (const auto& p: pts)
-      points.emplace_back(p, ptType);
-  }
-
-  explicit LineString(const XmlNode& x,
-                      Point::TypeValidator point_validator=Point::AnyType);
-  void dump(XmlNode& node) const;
-}; // LineString
+LineString::LineString(Type type_, Point::Type ptType, const Path& ring)
+  : type{type_}
+{
+  points.reserve(ring.size());
+  for (const auto& p: ring)
+    points.emplace_back(p, ptType);
+}
 
 const char* Name(LineString::Type x) noexcept {
   switch (x) {
@@ -362,10 +257,6 @@ const char* Name(LineString::Type x) noexcept {
     default: return nullptr;
   }
 } // Name(LineString::Type)
-
-namespace tjg {
-template<> struct EnumValues<LineString::Type>: LineString::Types { };
-} // tjg
 
 LineString::LineString(const XmlNode& x, Point::TypeValidator point_validator)
   : type{RequireAttr<Type>(x, "A")}
@@ -399,38 +290,17 @@ void LineString::dump(XmlNode& node) const {
   }
 } // LineString::dump
 
-struct Polygon { // PLN
-  enum class Type {
-    Boundary=1, Treatment, Water, Building, Road, Obstacle, Flag, Other, Field,
-    Headland, Buffer, Windbreak
-  }; // Type
-
-  using Types = tjg::EnumList<Type, Type::Boundary, Type::Treatment,
-      Type::Water, Type::Building, Type::Road, Type::Obstacle, Type::Flag,
-      Type::Other, Type::Field, Type::Headland, Type::Buffer, Type::Windbreak>;
-
-  Type type;
-  LineString outer;
-  std::vector<LineString> inners;
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-
-  GeoPolygon geo() const {
-    auto out = GeoPolygon{};
-    out.outer() = outer.ring();
-    for (const auto& p: inners)
-      out.inners().emplace_back(p.ring());
-    ggl::correct(out);
-    auto msg = std::string{};
-    if (!ggl::is_valid(out, msg))
-      throw std::runtime_error{"Polygon::geo: invalid polygon: " + msg};
-    return out;
-  } // geo
-
-  Polygon() = default;
-  explicit Polygon(const GeoPolygon& poly, Type type_ = Type::Boundary);
-  explicit Polygon(const XmlNode& x);
-  void dump(XmlNode& node) const;
-}; // Polygon
+GeoPolygon Polygon::geo() const {
+  auto out = GeoPolygon{};
+  out.outer() = outer.ring();
+  for (const auto& p: inners)
+    out.inners().emplace_back(p.ring());
+  ggl::correct(out);
+  auto msg = std::string{};
+  if (!ggl::is_valid(out, msg))
+    throw std::runtime_error{"Polygon::geo: invalid polygon: " + msg};
+  return out;
+} // Polygon::geo
 
 const char* Name(Polygon::Type x) noexcept {
   switch (x) {
@@ -450,18 +320,32 @@ const char* Name(Polygon::Type x) noexcept {
   }
 } // Name(Polygon::Type)
 
-namespace tjg {
-template<> struct EnumValues<Polygon::Type>: Polygon::Types { };
-} // tjg
+LatLon UnGeo(const GeoPoint& pt) { return {ggl::get<1>(pt), ggl::get<0>(pt)}; }
+
+Path UnGeo(const GeoLineString& lstr) {
+  auto rval = Path{};
+  rval.reserve(lstr.size());
+  for (const auto& p: lstr)
+    rval.emplace_back(UnGeo(p));
+  return rval;
+}
+
+Path UnGeo(const GeoRing& ring) {
+  auto rval = Path{};
+  rval.reserve(ring.size());
+  for (const auto& p: ring)
+    rval.emplace_back(UnGeo(p));
+  return rval;
+}
 
 Polygon::Polygon(const GeoPolygon& poly, Type type_)
   : type{type_}
-  , outer{LineString::Type::Exterior, Point::Type::Field, poly.outer()}
+  , outer{LineString::Type::Exterior, Point::Type::Field, UnGeo(poly.outer())}
   , inners{}
 {
   inners.reserve(poly.inners().size());
   for (const auto& r: poly.inners())
-    inners.emplace_back(LineString::Type::Interior, Point::Type::Field, r);
+    inners.emplace_back(LineString::Type::Interior, Point::Type::Field, UnGeo(r));
 }
 
 Polygon::Polygon(const XmlNode& x)
@@ -514,81 +398,40 @@ void Polygon::dump(XmlNode& node) const {
   auto c = node.append_child("LSG");
   outer.dump(c);
   for (const auto& lsg: inners) {
-    c = (node.append_child("LSG"));
+    c = node.append_child("LSG");
     lsg.dump(c);
   }
 } // Polygon::dump
 
-struct Swath { // GPN
-  enum class Type { AB = 1, APlus, Curve, Pivot, Spiral };
-  using TypeList = tjg::EnumList<Type, Type::AB, Type::APlus, Type::Curve,
-                                 Type::Pivot, Type::Spiral>;
-  enum class Option { CW=1, CCW, Full };
-  using OptionList =
-                  tjg::EnumList<Option, Option::CW, Option::CCW, Option::Full>;
-  enum class Direction { Both=1, Left, Right, None };
-  using DirectionList = tjg::EnumList<Direction, Direction::Both,
-                            Direction::Left, Direction::Right, Direction::None>;
-  enum class Extension { Both=1, First, Last, None };
-  using ExtensionList = tjg::EnumList<Extension, Extension::Both,
-                            Extension::First, Extension::Last, Extension::None>;
-  enum class Method {
-    NoGps=0, GNSS, DGNSS, PreciseGNSS, RtkInt, RtkFloat, DR, Manual, Sim,
-    PC=16, Other
-  };
-  using MethodList = tjg::EnumList<Method, Method::NoGps, Method::GNSS,
-      Method::DGNSS, Method::PreciseGNSS, Method::RtkInt, Method::RtkFloat,
-      Method::DR, Method::Manual, Method::Sim, Method::PC, Method::Other>;
-  std::string id;
-  std::string name;       // optional
-  Type type;
-  std::optional<Option>    option;
-  std::optional<Direction> direction;
-  std::optional<Extension> extension;
-  std::optional<Angle>     heading;
-  std::optional<unsigned>  radius;
-  std::optional<Method>    method;
-  std::optional<double>    horizontalAccuracy;
-  std::optional<double>    verticalAccuracy;
-  std::string baseId;
-  std::string srid;
-  std::optional<unsigned>  leftRemaining;
-  std::optional<unsigned>  rightRemaining;
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  std::vector<LineString> paths;
-  std::vector<Polygon> boundaries;
-  void push(const GeoLineString& path) {
-    if (path.empty())
-      return;
-    auto ls = LineString{LineString::Type::Guidance, Point::Type::GuidePoint,
-                         path};
-    if (ls.size() > 1) {
-      ls.points.front().type = Point::Type::GuideA;
-      ls.points.back() .type = Point::Type::GuideB;
-    }
-    paths.emplace_back(std::move(ls));
+void Swath::push(const GeoLineString& path) {
+  if (path.empty())
+    return;
+  auto ls = LineString{LineString::Type::Guidance, Point::Type::GuidePoint,
+                       UnGeo(path)};
+  if (ls.size() > 1) {
+    ls.points.front().type = Point::Type::GuideA;
+    ls.points.back() .type = Point::Type::GuideB;
   }
-  Swath() = default;
-  explicit Swath(std::string_view id_, Type type_ = Type::Curve)
-    : id{id_}, type{type_}
-  {
-    if (!std::regex_match(id, isoxml::GpnRe))
-      throw std::invalid_argument{"Swath: invalid id: " + id};
-  }
+  paths.emplace_back(std::move(ls));
+} // Swath::push
 
-  Swath(std::string_view id_, const GeoPolyLine& lines, Type type_=Type::Curve)
-    : Swath{id_, type_}
-  {
-    for (const auto& l: lines)
-      push(l);
-  }
+Swath::Swath(std::string_view id_, Type type_)
+  : id{id_}, type{type_}
+{
+  if (!std::regex_match(id, isoxml::GpnRe))
+    throw std::invalid_argument{"Swath: invalid id: " + id};
+}
 
-  Swath(std::string_view id_, const GeoLineString& ls, Type type_=Type::Curve)
-    : Swath{id_, type_}
-    { push(ls); }
-  explicit Swath(const XmlNode& node);
-  void dump(XmlNode& node) const;
-}; // Swath
+Swath::Swath(std::string_view id_, const GeoPolyLine& lines, Type type_)
+  : Swath{id_, type_}
+{
+  for (const auto& l: lines)
+    push(l);
+}
+
+Swath::Swath(std::string_view id_, const GeoLineString& ls, Type type_)
+  : Swath{id_, type_}
+  { push(ls); }
 
 const char* Name(Swath::Type x) noexcept {
   switch (x) {
@@ -646,14 +489,6 @@ const char* Name(Swath::Method x) noexcept {
     default: return nullptr;
   }
 } // Name(Swath::Method)
-
-namespace tjg {
-template<> struct EnumValues<Swath::Type>     : Swath::TypeList      { };
-template<> struct EnumValues<Swath::Option>   : Swath::OptionList    { };
-template<> struct EnumValues<Swath::Direction>: Swath::DirectionList { };
-template<> struct EnumValues<Swath::Extension>: Swath::ExtensionList { };
-template<> struct EnumValues<Swath::Method>   : Swath::MethodList    { };
-} // tjg
 
 Swath::Swath(const XmlNode& node)
   : id  {RequireAttr<std::string>(node, "A")}
@@ -721,21 +556,12 @@ void Swath::dump(XmlNode& node) const {
   }
 } // Swath::dump
 
-struct Guide {      // GGP
-  std::string id;   // A
-  std::string name; // B optional
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  std::vector<Swath> swaths;
-  Guide() = default;
-  explicit Guide(std::string_view id_, std::string_view name_="")
-    : id{id_}, name{name_}
-  {
-    if (!std::regex_match(id, isoxml::GgpRe))
-      throw std::invalid_argument{"Guide: invalid id: " + id};
-  }
-  Guide(const XmlNode& node);
-  void dump(XmlNode& node) const;
-}; // Guide
+Guide::Guide(std::string_view id_, std::string_view name_)
+  : id{id_}, name{name_}
+{
+  if (!std::regex_match(id, isoxml::GgpRe))
+    throw std::invalid_argument{"Guide: invalid id: " + id};
+}
 
 Guide::Guide(const XmlNode& node)
   : id  {RequireAttr<std::string>(node, "A")}
@@ -771,26 +597,12 @@ void Guide::dump(XmlNode& node) const {
   }
 } // Guide::dump
 
-struct Field { // PFD
-  std::string id;     // A
-  std::string code;   // B optional
-  std::string name;   // C
-  unsigned area;      // D
-  std::string ctrId;  // E optional
-  std::string frmId;  // F optional
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  std::vector<Polygon> parts;
-  std::vector<Guide> guides;
-  Field() = default;
-  Field(std::string_view id_, std::string_view name_="", unsigned area_=0)
-    : id{id_}, name{name_}, area{area_}
-  {
-    if (!std::regex_match(id, isoxml::PfdRe))
-      throw std::invalid_argument{"Field: invalid id: " + id};
-  }
-  explicit Field(const XmlNode& x);
-  void dump(XmlNode& x) const;
-}; // Field
+Field::Field(std::string_view id_, std::string_view name_, unsigned area_)
+  : id{id_}, name{name_}, area{area_}
+{
+  if (!std::regex_match(id, isoxml::PfdRe))
+    throw std::invalid_argument{"Field: invalid id: " + id};
+}
 
 Field::Field(const XmlNode& x)
   : id   {RequireAttr<std::string>(x, "A")}
@@ -836,19 +648,6 @@ void Field::dump(XmlNode& node) const {
   }
 } // Field::dump
 
-struct Value { // VPN
-  std::string id;
-  int offset;
-  double scale;
-  int decimals;
-  std::string units; // optional
-  std::string color; // optional
-  std::vector<std::pair<std::string, std::string>> otherAttrs;
-  Value() = default;
-  explicit Value(const XmlNode& node);
-  void dump(XmlNode& node) const;
-}; // Value
-
 Value::Value(const XmlNode& node)
   : id      {RequireAttr<std::string>(node, "A")}
   , offset  {RequireAttr<int        >(node, "B")}
@@ -875,24 +674,9 @@ void Value::dump(XmlNode& node) const {
   if (!color.empty()) node.append_attribute("F") = color;
 } // Value::dump
 
-struct FarmDb {
-  int versionMajor       =  3;  // required
-  int versionMinor       =  0;  // required
-  int dataTransferOrigin = -1;  // optional, -1 means "unset"
-  std::string swVendor;         // optional
-  std::string swVersion;        // optional
-  std::vector<std::pair<std::string,std::string>> otherAttrs;
-  std::vector<Customer> customers;
-  std::vector<Farm>     farms;
-  std::vector<Field>    fields;
-  std::vector<Value>    values;
-  FarmDb() = default;
-  explicit FarmDb(std::string_view version)
-    : swVendor{"Ekman and Gober"}, swVersion{version}
-    { }
-  FarmDb(const XmlNode& node);
-  void dump(XmlNode& node) const;
-}; // FarmDb
+FarmDb::FarmDb(std::string_view version)
+  : swVendor{"Ekman and Gober"}, swVersion{version}
+  { }
 
 FarmDb::FarmDb(const XmlNode& node)
   : versionMajor{RequireAttr<int>(node, isoxml::root_attr::VersionMajor)}
@@ -963,51 +747,4 @@ void FarmDb::dump(XmlNode& node) const {
   }
 } // FarmDb::dump
 
-// ---------------------------------------------------------------------
-// Main: load, basic validation, ordered traversal with dispatch.
-int main(int argc, const char *argv[]) {
-  try {
-    const auto path = (argc > 1) ? argv[1] : "TASKDATA.XML";
-
-    auto doc = pugi::xml_document{};
-    auto res = doc.load_file(path, pugi::parse_default | pugi::parse_ws_pcdata);
-    if (!res) {
-      std::cerr << std::format("XML parse error: {} (offset {})\n",
-                               res.description(), res.offset);
-      return 1;
-    }
-
-    auto root = doc.child(isoxml::Root);
-    if (!root) {
-      std::cerr << std::format("error: missing root <{}>\n", isoxml::Root);
-      return 1;
-    }
-
-    auto top = FarmDb{root};
-    std::cout << top.customers.size() << " customers\n"
-              << top.farms.size()     << " farms\n"
-              << top.fields.size()    << " fields\n"
-              << top.values.size()    << " values\n";
-
-    top.swVendor = "Terry Golubiewski";
-    top.swVersion = "0.1 (alpha)";
-
-    auto doc2 = pugi::xml_document{};
-    auto root2 = doc2.append_child(isoxml::Root);
-    top.dump(root2);
-
-    auto ok = doc2.save_file("out.xml", "  ");
-    if (!ok)
-      throw std::runtime_error{"Error writing 'out.xml'"};
-    return 0;
-  }
-  catch (std::exception& x) {
-    std::cerr << "Exception: " << x.what() << '\n';
-  }
-  catch (...) {
-    std::cerr << "Unknown exception\n";
-  }
-
-  return 1;
-} // main
-
+} // farm_db
