@@ -57,6 +57,15 @@ namespace root_attr {
 
 namespace farm_db {
 
+namespace ggl = boost::geometry;
+
+using GeoPoint = ggl::model::point<double, 2, ggl::cs::geographic<ggl::degree>>;
+using GeoLineString = ggl::model::linestring<GeoPoint>;
+using GeoPolyLine   = ggl::model::multi_linestring<GeoLineString>;
+using GeoRing       = ggl::model::ring<GeoPoint, true >;
+using GeoHole       = ggl::model::ring<GeoPoint, false>;
+using GeoPolygon    = ggl::model::polygon<GeoPoint>;
+
 [[noreturn]] void InvalidNode(const XmlNode& xml, std::string what) {
   auto k = tjg::name(xml);
   what.reserve(what.size() + 8 + k.size());
@@ -163,6 +172,7 @@ void Farm::dump(XmlNode& node) const {
     node.append_attribute(k) = v;
 } // Farm::dump
 
+
 const char* Name(Point::Type x) noexcept {
   switch (x) {
     case Point::Type::Flag:        return "Flag";
@@ -207,33 +217,35 @@ void Point::dump(XmlNode& x) const {
     x.append_attribute(k) = v;
 } // Point::dump
 
-GeoLineString LineString::geo() const {
-  auto out = GeoLineString{};
-  out.reserve(points.size());
-  for (const auto& p: points)
-    out.emplace_back(p.geo());
-  return out;
-} // geo
+GeoPoint Geo(const Point& pt) { return GeoPoint{pt.longitude(), pt.latitude()}; }
 
-GeoRing LineString::ring() const {
-  auto ls = geo();
+GeoLineString Geo(const LineString& lstr) {
+  auto out = GeoLineString{};
+  out.reserve(lstr.points.size());
+  for (const auto& p: lstr.points)
+    out.emplace_back(Geo(p));
+  return out;
+} // Geo(LineString)
+
+GeoRing MakeGeoRing(const LineString& lstr) {
+  auto ls = Geo(lstr);
   auto out = GeoRing{ls.begin(), ls.end()};
   ggl::correct(out);
   auto msg = std::string{};
   if (!ggl::is_valid(out, msg))
     throw std::runtime_error{"LineString::ring: not a ring: " + msg};
   return out;
-} // ring
+} // MakeGeoRing
 
-GeoHole LineString::hole() const {
-  auto ls = geo();
+GeoHole MakeGeoHole(const LineString& lstr) {
+  auto ls = Geo(lstr);
   auto out = GeoHole{ls.begin(), ls.end()};
   ggl::correct(out);
   auto msg = std::string{};
   if (!ggl::is_valid(out, msg))
     throw std::runtime_error{"LineString::hole: not a hole: " + msg};
   return out;
-} // hole
+} // MakeGeoHole
 
 LineString::LineString(Type type_, Point::Type ptType, const Path& ring)
   : type{type_}
@@ -290,17 +302,17 @@ void LineString::dump(XmlNode& node) const {
   }
 } // LineString::dump
 
-GeoPolygon Polygon::geo() const {
+GeoPolygon Geo(const Polygon& poly) {
   auto out = GeoPolygon{};
-  out.outer() = outer.ring();
-  for (const auto& p: inners)
-    out.inners().emplace_back(p.ring());
+  out.outer() = MakeGeoRing(poly.outer);
+  for (const auto& p: poly.inners)
+    out.inners().emplace_back(MakeGeoRing(p));
   ggl::correct(out);
   auto msg = std::string{};
   if (!ggl::is_valid(out, msg))
-    throw std::runtime_error{"Polygon::geo: invalid polygon: " + msg};
+    throw std::runtime_error{"Geo(Polygon): invalid polygon: " + msg};
   return out;
-} // Polygon::geo
+} // Geo(Polygon)
 
 const char* Name(Polygon::Type x) noexcept {
   switch (x) {
@@ -338,14 +350,20 @@ Path UnGeo(const GeoRing& ring) {
   return rval;
 }
 
-Polygon::Polygon(const GeoPolygon& poly, Type type_)
+Polygon::Polygon(const Path& outer_, Type type_)
   : type{type_}
-  , outer{LineString::Type::Exterior, Point::Type::Field, UnGeo(poly.outer())}
+  , outer{LineString::Type::Exterior, Point::Type::Field, outer_}
+  , inners{}
+  { }
+
+Polygon::Polygon(const Path& outer_, std::span<Path> inners_, Type type_)
+  : type{type_}
+  , outer{LineString::Type::Exterior, Point::Type::Field, outer_}
   , inners{}
 {
-  inners.reserve(poly.inners().size());
-  for (const auto& r: poly.inners())
-    inners.emplace_back(LineString::Type::Interior, Point::Type::Field, UnGeo(r));
+  inners.reserve(inners_.size());
+  for (const auto& r: inners_)
+    inners.emplace_back(LineString::Type::Interior, Point::Type::Field, r);
 }
 
 Polygon::Polygon(const XmlNode& x)
@@ -403,11 +421,11 @@ void Polygon::dump(XmlNode& node) const {
   }
 } // Polygon::dump
 
-void Swath::push(const GeoLineString& path) {
+void Swath::push(const Path& path) {
   if (path.empty())
     return;
   auto ls = LineString{LineString::Type::Guidance, Point::Type::GuidePoint,
-                       UnGeo(path)};
+                       path};
   if (ls.size() > 1) {
     ls.points.front().type = Point::Type::GuideA;
     ls.points.back() .type = Point::Type::GuideB;
@@ -422,14 +440,14 @@ Swath::Swath(std::string_view id_, Type type_)
     throw std::invalid_argument{"Swath: invalid id: " + id};
 }
 
-Swath::Swath(std::string_view id_, const GeoPolyLine& lines, Type type_)
+Swath::Swath(std::string_view id_, std::span<Path> lines, Type type_)
   : Swath{id_, type_}
 {
   for (const auto& l: lines)
     push(l);
 }
 
-Swath::Swath(std::string_view id_, const GeoLineString& ls, Type type_)
+Swath::Swath(std::string_view id_, const Path& ls, Type type_)
   : Swath{id_, type_}
   { push(ls); }
 

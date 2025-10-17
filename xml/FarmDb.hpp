@@ -6,11 +6,10 @@
 
 #include "enum_help.hpp"
 
-#include <boost/geometry/geometries/geometries.hpp>
-
 #include <string>
 #include <vector>
 #include <string_view>
+#include <span>
 #include <optional>
 #include <functional>
 #include <utility>
@@ -21,15 +20,6 @@ struct xml_attribute;
 } // pugi
 
 namespace farm_db {
-
-namespace ggl = boost::geometry;
-
-using GeoPoint = ggl::model::point<double, 2, ggl::cs::geographic<ggl::degree>>;
-using GeoLineString = ggl::model::linestring<GeoPoint>;
-using GeoPolyLine   = ggl::model::multi_linestring<GeoLineString>;
-using GeoRing       = ggl::model::ring<GeoPoint, true >;
-using GeoHole       = ggl::model::ring<GeoPoint, false>;
-using GeoPolygon    = ggl::model::polygon<GeoPoint>;
 
 using XmlNode = pugi::xml_node;
 using XmlAttr = pugi::xml_attribute;
@@ -81,14 +71,11 @@ struct Point {
   static constexpr bool AnyType(Type) { return true; }
   Angle latitude()  const { return point.latitude;  }
   Angle longitude() const { return point.longitude; }
-  GeoPoint geo()    const { return GeoPoint{longitude(), latitude()}; }
   Point() = default;
   Point(const LatLon& pt, Type type_ = Type::Other)
     : type{type_}, point{pt} { }
   Point(Angle lat, Angle lon, Type type_ = Type::Other)
     : type{type_}, point{lon, lat} { }
-  explicit Point(const GeoPoint& geo_pt, Type type_ = Type::Other)
-    : type{type_}, point{ggl::get<1>(geo_pt), ggl::get<0>(geo_pt)} { }
   explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
   void dump(XmlNode& x) const;
 }; // Point
@@ -117,10 +104,6 @@ struct LineString { // LSG
   bool empty() const { return points.empty(); }
   std::size_t size() const { return points.size(); }
 
-  GeoLineString geo() const;
-  GeoRing ring() const;
-  GeoHole hole() const;
-
   LineString() = default;
   LineString(Type type_, Point::Type ptType, const Path& pts);
 
@@ -146,10 +129,9 @@ struct Polygon { // PLN
   std::vector<LineString> inners;
   std::vector<std::pair<std::string, std::string>> otherAttrs;
 
-  GeoPolygon geo() const;
-
   Polygon() = default;
-  explicit Polygon(const GeoPolygon& poly, Type type_ = Type::Boundary);
+  explicit Polygon(const Path& poly, Type type_ = Type::Boundary);
+  Polygon(const Path& poly, std::span<Path> inners_, Type type_ = Type::Boundary);
   explicit Polygon(const XmlNode& x);
   void dump(XmlNode& node) const;
 }; // Polygon
@@ -194,11 +176,11 @@ struct Swath { // GPN
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   std::vector<LineString> paths;
   std::vector<Polygon> boundaries;
-  void push(const GeoLineString& path);
+  void push(const Path& path);
   Swath() = default;
   explicit Swath(std::string_view id_, Type type_ = Type::Curve);
-  Swath(std::string_view id_, const GeoPolyLine& lines, Type type_=Type::Curve);
-  Swath(std::string_view id_, const GeoLineString& ls, Type type_=Type::Curve);
+  Swath(std::string_view id_, const Path& ls, Type type_=Type::Curve);
+  Swath(std::string_view id_, const std::span<Path> lines, Type type_=Type::Curve);
   explicit Swath(const XmlNode& node);
   void dump(XmlNode& node) const;
 }; // Swath
