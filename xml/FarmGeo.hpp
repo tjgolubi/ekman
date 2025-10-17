@@ -26,28 +26,28 @@ struct dimension<farm_db::LatLon>
 template<std::size_t Dim>
 requires (Dim == 0 || Dim == 1)
 struct access<farm_db::LatLon, Dim> {
-  //static constexpr auto deg = mp_units::angular::degree;
+  static constexpr auto deg = mp_units::angular::degree;
   static constexpr double get(const farm_db::LatLon& p) {
     if constexpr (Dim == 0)
-      return p.longitude;
+      return p.longitude.numerical_value_in(deg);
     else
-      return p.latitude;
+      return p.latitude.numerical_value_in(deg);
   }
   static constexpr void set(farm_db::LatLon& p, double v) {
     if constexpr (Dim == 0)
-      p.longitude = v;
+      p.longitude = v * deg;
     else
-      p.latitude  = v;
+      p.latitude  = v * deg;
   }
 }; // access
 
 template<>
 struct make<farm_db::LatLon> {
-  //static constexpr auto deg = mp_units::angular::degree;
+  static constexpr auto deg = mp_units::angular::degree;
   using point_type = farm_db::LatLon;
   static constexpr auto is_specialized = true;
   static constexpr point_type apply(double x, double y)
-    { return point_type{y, x}; }
+    { return point_type{y * deg, x * deg}; }
 }; // make
 
 } // boost::geometry::traits

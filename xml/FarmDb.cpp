@@ -152,7 +152,6 @@ void Farm::dump(XmlNode& node) const {
     node.append_attribute(k) = v;
 } // Farm::dump
 
-
 const char* Name(Point::Type x) noexcept {
   switch (x) {
     case Point::Type::Flag:        return "Flag";
@@ -172,8 +171,8 @@ const char* Name(Point::Type x) noexcept {
 
 Point::Point(const XmlNode& x, TypeValidator validator)
   : type{ RequireAttr<Type >(x, "A")}
-  , point{LatLon(RequireAttr<Angle>(x, "C"),
-                 RequireAttr<Angle>(x, "D"))}
+  , point{LatLon(RequireAttr<double>(x, "C") * units::deg,
+                 RequireAttr<double>(x, "D") * units::deg)}
 {
   for (const auto& a: x.attributes()) {
     auto k = tjg::name(a);
@@ -189,10 +188,11 @@ Point::Point(const XmlNode& x, TypeValidator validator)
 } // ctor
 
 void Point::dump(XmlNode& x) const {
+  using mp_units::angular::unit_symbols::deg;
   x.set_name("PNT");
   x.append_attribute("A") = static_cast<int>(type);
-  x.append_attribute("C") = point.latitude;
-  x.append_attribute("D") = point.longitude;
+  x.append_attribute("C") = point.latitude .numerical_value_in(deg);
+  x.append_attribute("D") = point.longitude.numerical_value_in(deg);
   for (const auto& [k, v]: otherAttrs)
     x.append_attribute(k) = v;
 } // Point::dump
@@ -433,6 +433,7 @@ Swath::Swath(const XmlNode& node)
   , type{RequireAttr<Type>(node, "C")}
 {
   for (const auto& a: node.attributes()) {
+    using mp_units::angular::unit_symbols::deg;
     auto k = tjg::name(a);
     if (k == "A" || k == "C")
       continue;
@@ -440,7 +441,7 @@ Swath::Swath(const XmlNode& node)
     else if (k == "D") option    = tjg::get_attr<Option>(a);
     else if (k == "E") direction = tjg::get_attr<Direction>(a);
     else if (k == "F") extension = tjg::get_attr<Extension>(a);
-    else if (k == "G") heading   = tjg::get_attr<Angle>(a);
+    else if (k == "G") heading   = tjg::get_attr<double>(a) * deg;
     else if (k == "H") radius    = tjg::get_attr<unsigned>(a);
     else if (k == "I") method    = tjg::get_attr<Method>(a);
     else if (k == "J") horizontalAccuracy = tjg::get_attr<double>(a);
@@ -462,6 +463,7 @@ Swath::Swath(const XmlNode& node)
 } // Swath::ctor
 
 void Swath::dump(XmlNode& node) const {
+  using mp_units::angular::unit_symbols::deg;
   node.set_name("GPN");
   node.append_attribute("A") = id;
   if (!name.empty()) node.append_attribute("B") = name;
@@ -469,7 +471,7 @@ void Swath::dump(XmlNode& node) const {
   if (option)    node.append_attribute("D") = static_cast<int>(*option);
   if (direction) node.append_attribute("E") = static_cast<int>(*direction);
   if (extension) node.append_attribute("F") = static_cast<int>(*extension);
-  if (heading)   node.append_attribute("G") = *heading;
+  if (heading)   node.append_attribute("G") = heading->numerical_value_in(deg);
   if (radius)    node.append_attribute("H") = *radius;
   if (method)    node.append_attribute("I") = static_cast<int>(*method);
   if (horizontalAccuracy)

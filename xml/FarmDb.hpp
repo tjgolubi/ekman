@@ -6,6 +6,12 @@
 
 #include "enum_help.hpp"
 
+#include <mp-units/systems/isq_angle.h>
+#include <mp-units/systems/isq/space_and_time.h>
+#include <mp-units/systems/angular/units.h>
+#include <mp-units/systems/si.h>
+#include <mp-units/framework/quantity.h>
+
 #include <string>
 #include <vector>
 #include <string_view>
@@ -45,14 +51,28 @@ struct Farm {           // FRM
   void dump(XmlNode& node) const;
 }; // Farm
 
-using Degrees = double;
-using Angle   = Degrees;
+namespace units {
+
+constexpr auto deg = mp_units::angular::degree;
+
+constexpr struct heading final
+  : mp_units::quantity_spec<mp_units::angular::angle> {} heading;
+constexpr struct latitude final
+  : mp_units::quantity_spec<mp_units::angular::angle> {} latitude;
+constexpr struct longitude final
+  : mp_units::quantity_spec<mp_units::angular::angle> {} longitude;
+
+} // units
+
+using HdgDeg = mp_units::quantity<units::heading  [units::deg]>;
+using LatDeg = mp_units::quantity<units::latitude [units::deg]>;
+using LonDeg = mp_units::quantity<units::longitude[units::deg]>;
 
 struct LatLon {
-  Angle latitude;
-  Angle longitude;
+  LatDeg latitude;
+  LonDeg longitude;
   LatLon() = default;
-  LatLon(Angle lat_, Angle lon_) : latitude{lat_}, longitude(lon_) { }
+  LatLon(LatDeg lat_, LonDeg lon_) : latitude{lat_}, longitude(lon_) { }
 }; // LatLon
 
 using Path = std::vector<LatLon>;
@@ -70,13 +90,13 @@ struct Point {
   std::vector<std::pair<std::string, std::string>> otherAttrs;
   using TypeValidator = std::function<bool(Type)>;
   static constexpr bool AnyType(Type) { return true; }
-  Angle latitude()  const { return point.latitude;  }
-  Angle longitude() const { return point.longitude; }
+  LatDeg latitude()  const { return point.latitude;  }
+  LonDeg longitude() const { return point.longitude; }
   Point() = default;
   Point(const LatLon& pt, Type type_ = Type::Other)
     : type{type_}, point{pt} { }
-  Point(Angle lat, Angle lon, Type type_ = Type::Other)
-    : type{type_}, point{lon, lat} { }
+  Point(LatDeg lat, LonDeg lon, Type type_ = Type::Other)
+    : type{type_}, point{lat, lon} { }
   explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
   void dump(XmlNode& x) const;
 }; // Point
@@ -85,14 +105,7 @@ const char* Name(Point::Type x) noexcept;
 
 struct LineString { // LSG
   enum class Type {
-    Exterior=1,
-    Interior,
-    TramLine,
-    Sampling,
-    Guidance,
-    Drainage,
-    Fence,
-    Flag,
+    Exterior=1, Interior, TramLine, Sampling, Guidance, Drainage, Fence, Flag,
     Obstacle
   };
   using Types = tjg::EnumList<Type, Type::Exterior, Type::Interior,
@@ -165,7 +178,7 @@ struct Swath { // GPN
   std::optional<Option>    option;
   std::optional<Direction> direction;
   std::optional<Extension> extension;
-  std::optional<Angle>     heading;
+  std::optional<HdgDeg>    heading;
   std::optional<unsigned>  radius;
   std::optional<Method>    method;
   std::optional<double>    horizontalAccuracy;
