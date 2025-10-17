@@ -34,7 +34,7 @@ INCLUDE:=$(PROJDIR)
 # Must use "=" because LIBS will be changed below.
 LIBS=
 
-DEBUG=1
+#DEBUG=1
 
 SHELL:=/bin/bash
 .SHELLFLAGS:=-eu -o pipefail -c

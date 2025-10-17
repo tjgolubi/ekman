@@ -219,7 +219,7 @@ PathVec ExtractSwaths(const Ring& ring, const CornerVec& corners) {
   for (int i = gsl::index{1}; i != n-1; ++i) {
     first = last;
     auto idx = corners.at(i+1);
-    gsl_Expects(idx < ring.size());
+    gsl_Expects(idx < std::ssize(ring));
     last  = ring.cbegin() + idx;
     gsl_Expects(last != ring.end());
     ptr = last;
