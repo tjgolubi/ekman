@@ -36,14 +36,10 @@ namespace gsl = gsl_lite;
 #include <cmath>
 #include <cstdlib>
 
-#include <iostream>
-#include <iomanip>
-
 namespace tjg {
 
-using Disp     = geom::Vec<Meters>;
-using MP       = ggl::model::multi_polygon<Polygon>;
-using Ring     = ggl::model::ring<Pt>;
+using MP   = ggl::model::multi_polygon<Polygon>;
+using Ring = ggl::model::ring<Pt>;
 
 using CornerVec   = std::vector<gsl::index>;
 using PolyCorners = std::vector<CornerVec>;
@@ -77,10 +73,10 @@ MP ComputeInset(const Polygon& in, Distance offset) {
 
   // ---- Inset buffer (negative distance) ----
   auto distance = ggl::strategy::buffer::distance_symmetric<Meters>{-offset.numerical_value_in(metre)};
-  auto side     = ggl::strategy::buffer::side_straight{};
-  auto join     = ggl::strategy::buffer::join_round{Tune::CirclePoints};
-  auto end      = ggl::strategy::buffer::end_round{Tune::CirclePoints};
-  auto point    = ggl::strategy::buffer::point_circle{Tune::CirclePoints};
+  auto side  = ggl::strategy::buffer::side_straight{};
+  auto join  = ggl::strategy::buffer::join_round{Tune::CirclePoints};
+  auto end   = ggl::strategy::buffer::end_round{Tune::CirclePoints};
+  auto point = ggl::strategy::buffer::point_circle{Tune::CirclePoints};
 
   auto inset = MP{};
   ggl::buffer(in, inset, distance, side, join, end, point);
@@ -223,10 +219,10 @@ std::vector<CornerVec> FindCorners(Polygon& poly) {
   return allCorners;
 } // FindCorners
 
-PathVec ExtractSwaths(const Ring& ring, const CornerVec& corners) {
+MultiPath ExtractSwaths(const Ring& ring, const CornerVec& corners) {
   gsl_Expects(corners.size() > 1 && corners[0] == 0);
   const auto n = std::ssize(corners);
-  auto swaths = PathVec{};
+  auto swaths = MultiPath{};
   swaths.reserve(corners.size());
   auto first = std::cbegin(ring);
   auto last  = first + corners[1];
@@ -257,11 +253,11 @@ template<class XY> using GeoT = Geo<std::remove_cv_t<XY>>::type;
 template<class G>  using XyT  =  Xy<std::remove_cv_t<G >>::type;
 
 template<> struct Geo<Path>    { using type = GeoPath; };
-template<> struct Geo<PathVec> { using type = GeoPathVec; };
+template<> struct Geo<MultiPath> { using type = GeoMultiPath; };
 template<> struct Geo<Polygon> { using type = GeoPolygon; };
 
 template<> struct Xy<GeoPath>    { using type = Path; };
-template<> struct Xy<GeoPathVec> { using type = PathVec; };
+template<> struct Xy<GeoMultiPath> { using type = MultiPath; };
 template<> struct Xy<GeoPolygon> { using type = Polygon; };
 
 template<class G, class Proj, typename CT>
@@ -283,16 +279,16 @@ GeoT<X> TransformToGeo(const X& geo_in,
 } // TransformToGeo
 
 template<class Proj, typename CT>
-std::vector<GeoPathVec>
-TransformToGeo(const std::vector<PathVec>& in,
+std::vector<GeoMultiPath>
+TransformToGeo(const std::vector<MultiPath>& in,
                const ggl::projections::projection<Proj, CT>& proj)
 {
-  auto out = std::vector<GeoPathVec>{};
+  auto out = std::vector<GeoMultiPath>{};
   out.reserve(in.size());
   for (const auto& pv: in)
     out.emplace_back(TransformToGeo(pv, proj));
   return out;
-} // TransformToGeo(vector<PathVec>)
+} // TransformToGeo(vector<MultiPath>)
 
 template<class Geo>
 auto MakeProjection(const Geo& geo) {
@@ -313,14 +309,14 @@ auto MakeProjection(const Geo& geo) {
 
 } // detail
 
-std::vector<PathVec>
+std::vector<MultiPath>
 BoundarySwaths(const Polygon& poly_in, Distance offset, Distance simplifyTol) {
   if (offset < 0.10 * metre)
     throw std::runtime_error{"<offset_m> must be >= 10 cm"};
   // (void) FindCorners(poly_in); // Modifys poly_in.
   auto inset_mp = detail::ComputeInset(poly_in, offset);
   auto simp_mp  = detail::Simplify(inset_mp, simplifyTol);
-  auto linesVec = std::vector<PathVec>{};
+  auto linesVec = std::vector<MultiPath>{};
   for (auto& poly: simp_mp) {
     auto cv = detail::FindCorners(poly); // Modifies poly
     gsl_Expects(std::ssize(cv) == 1 + std::ssize(poly.inners()));
@@ -332,13 +328,14 @@ BoundarySwaths(const Polygon& poly_in, Distance offset, Distance simplifyTol) {
   return linesVec;
 } // BoundarySwaths
 
-std::vector<GeoPathVec>
+std::vector<GeoMultiPath>
 BoundarySwaths(const GeoPolygon& poly_in, Distance offset, Distance simplifyTol)
 {
   const auto proj = detail::MakeProjection(poly_in);
-  auto xyPoly = detail::TransformToXy(poly_in, proj);
-  auto xyOut  = BoundarySwaths(xyPoly, offset, simplifyTol);
-  return detail::TransformToGeo(xyOut, proj);
+  auto xyPoly  = detail::TransformToXy(poly_in, proj);
+  auto xyOut   = BoundarySwaths(xyPoly, offset, simplifyTol);
+  auto geoPoly = detail::TransformToGeo(xyOut, proj);
+  return geoPoly;
 } // BoundarySwaths
 
 } // tjg

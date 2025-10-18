@@ -26,23 +26,23 @@ using Meters   = double;
 using Pt       = geom::Pt<Meters>;
 using Polygon  = ggl::model::polygon<Pt>;
 using Path     = ggl::model::linestring<Pt>;
-using PathVec  = ggl::model::multi_linestring<Path>;
+using MultiPath= ggl::model::multi_linestring<Path>;
 
 using Degrees = double;
 using GeoPt      = ggl::model::point<Degrees, 2, ggl::cs::geographic<ggl::degree>>;
-using GeoPolygon = ggl::model::polygon<GeoPt>;
-using GeoPath    = ggl::model::linestring<GeoPt>;
-using GeoPathVec = ggl::model::multi_linestring<GeoPath>;
+using GeoPolygon   = ggl::model::polygon<GeoPt>;
+using GeoPath      = ggl::model::linestring<GeoPt>;
+using GeoMultiPath = ggl::model::multi_linestring<GeoPath>;
 
 using Distance = quantity<mp_units::isq::distance[metre]>;
 
 constexpr Distance DefaultSimplifyTol = 0.10 * metre;
 
-std::vector<PathVec>
+std::vector<MultiPath>
 BoundarySwaths(const Polygon& poly_in, Distance offset,
                Distance simplifyTol = DefaultSimplifyTol);
 
-std::vector<GeoPathVec>
+std::vector<GeoMultiPath>
 BoundarySwaths(const GeoPolygon& poly_in, Distance offset,
                Distance simplifyTol = DefaultSimplifyTol);
 

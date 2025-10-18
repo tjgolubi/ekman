@@ -8,7 +8,7 @@ set mapping spherical
 set xlabel "lon (deg)"
 set ylabel "lat (deg)"
 set grid
-set key outside
+set key inside
 set size ratio -1   # keep aspect ratio
 
 plot "points.wgs84"  	using 2:1 w lp pt 6 lc rgb "blue"  t "original", \

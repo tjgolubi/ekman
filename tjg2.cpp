@@ -90,7 +90,7 @@ tjg::Polygon ReadPolygon(const fs::path& path) {
 } // ReadPolygon
 
 // Writes all the swaths associated with a single polygon.
-void WriteSwath(const fs::path& path, const tjg::PathVec& swath) {
+void WriteSwath(const fs::path& path, const tjg::MultiPath& swath) {
   if (swath.empty())
     return;
   const auto ext = path.extension();
@@ -109,7 +109,7 @@ void WriteSwath(const fs::path& path, const tjg::PathVec& swath) {
 } // WriteSwath
 
 // Writes all swaths associated with a field.
-void WriteSwaths(const fs::path& path, const std::vector<tjg::PathVec>& swaths)
+void WriteSwaths(const fs::path& path, const std::vector<tjg::MultiPath>& swaths)
 {
   if (swaths.empty())
     return;

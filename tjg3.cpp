@@ -108,7 +108,7 @@ tjg::GeoPolygon ReadPolygon(const fs::path& path) {
 } // ReadPolygon
 
 // Writes all the swaths associated with a single polygon.
-void WriteSwath(const fs::path& path, const tjg::GeoPathVec& swath) {
+void WriteSwath(const fs::path& path, const tjg::GeoMultiPath& swath) {
   if (swath.empty())
     return;
   const auto ext = path.extension();
@@ -120,14 +120,14 @@ void WriteSwath(const fs::path& path, const tjg::GeoPathVec& swath) {
     path2.replace_extension(ext2);
     auto out = std::ofstream{path2, std::ios::binary};
     if (!out) throw std::runtime_error{"cannot open output: " + path2.string()};
-    out << std::fixed << std::setprecision(2);
+    out << std::fixed << std::setprecision(16);
     for (const auto& pt: pth) out << pt << '\n';
     out.close();
   }
 } // WriteSwath
 
 // Writes all swaths associated with a field.
-void WriteSwaths(const fs::path& path, const std::vector<tjg::GeoPathVec>& swaths)
+void WriteSwaths(const fs::path& path, const std::vector<tjg::GeoMultiPath>& swaths)
 {
   if (swaths.empty())
     return;
