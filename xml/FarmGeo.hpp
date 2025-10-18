@@ -1,3 +1,4 @@
+#pragma once
 #include "FarmDb.hpp"
 
 #include <boost/geometry/geometries/point.hpp>
