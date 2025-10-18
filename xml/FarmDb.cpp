@@ -324,7 +324,7 @@ Polygon::Polygon(const XmlNode& x)
     throw std::runtime_error{"Polygon: exterior ring too small"};
   for (const auto& r: inners) {
     if (std::ssize(r) < 4)
-      throw std::runtime_error{"Polygon: inter ring too small"};
+      throw std::runtime_error{"Polygon: interior ring too small"};
   }
 } // Polygon ctor
 
