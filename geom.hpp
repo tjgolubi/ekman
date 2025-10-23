@@ -10,7 +10,10 @@
 
 namespace geom {
 
-template<typename U> struct SquaredType { using type = U; };
+template<typename U> struct SquaredType {
+  using type = decltype(std::declval<U>() * std::declval<U>());
+};
+
 template<typename U>
 using SquaredTypeT = SquaredType<U>::type;
 

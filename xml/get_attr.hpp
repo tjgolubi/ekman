@@ -43,6 +43,11 @@ concept HasFromChars = Enum<E> && requires(std::string_view sv) {
   { FromChars<E>(sv) } -> std::same_as<std::optional<E>>;
 };
 
+template<typename T>
+concept HasStdFromChars = requires (const char* f, const char* l, T& v) {
+  { std::from_chars(f, l, v) } -> std::same_as<std::from_chars_result>;
+};
+
 } // detail
 
 template<typename T>
@@ -120,16 +125,34 @@ inline std::optional<T> try_get_attr(const pugi::xml_attribute& a) noexcept {
   else if constexpr (std::floating_point<T>) {
     auto s = a.value();
     if (!s || !s[0]) return std::nullopt;
-    while (std::isspace(static_cast<unsigned char>(*s)))
-      ++s;
-    if (*s == '+') ++s;
-    auto sv = std::string_view{s};
-    auto value = T{};
-    const auto first = sv.data();
-    const auto last  = first + sv.size();
-    auto r = std::from_chars(first, last, value);
-    if (r.ptr == last && r.ec == std::errc{})
-      return value;
+    if constexpr (detail::HasStdFromChars<T>) {
+      while (std::isspace(static_cast<unsigned char>(*s)))
+        ++s;
+      if (*s == '+') ++s;
+      auto sv = std::string_view{s};
+      auto value = T{};
+      const auto first = sv.data();
+      const auto last  = first + sv.size();
+      auto r = std::from_chars(first, last, value);
+      if (r.ptr == last && r.ec == std::errc{})
+        return value;
+    }
+    else {
+      char* end = nullptr;
+      if constexpr (std::same_as<T, float>) {
+        auto x = std::strtof(s, &end);
+        if (end != s && x != HUGE_VALF)
+          return x;
+      } else if constexpr (std::same_as<T, double>) {
+        auto x = std::strtod(s, &end);
+        if (end != s && x != HUGE_VAL)
+          return x;
+      } else {
+        auto x = std::strtold(s, &end);
+        if (end != s && x != HUGE_VALL)
+          return x;
+      }
+    }
   }
   else {
     static_assert(detail::DependentFalse<T>, "get_attr: invalid type");

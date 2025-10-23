@@ -185,6 +185,7 @@ struct Point {
   explicit Point(const XmlNode& x, TypeValidator validator=AnyType);
 }; // Point
 
+[[maybe_unused]]
 constexpr const char* Name(Point::Type t) noexcept { return Point::Name(t); }
 
 Point::Point(const XmlNode& x, TypeValidator validator)
@@ -238,6 +239,7 @@ struct LineString { // LSG
                       Point::TypeValidator point_validator=Point::AnyType);
 }; // LineString
 
+[[maybe_unused]]
 constexpr const char* Name(LineString::Type t) noexcept
   { return LineString::Name(t); }
 

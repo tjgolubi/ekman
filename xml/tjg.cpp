@@ -48,12 +48,6 @@ using GeoPolygon    = ggl::model::polygon<GeoPoint>;
 namespace isoxml {
 
 constexpr char Root[] = "ISO11783_TaskData";
-constexpr char CTR[]  = "CTR";
-constexpr char FRM[]  = "FRM";
-constexpr char PFD[]  = "PFD";
-constexpr char PLN[]  = "PLN";
-constexpr char LSG[]  = "LSG";
-constexpr char PNT[]  = "PNT";
 
 const auto CtrRe = std::regex{"CTR-?[0-9]+"};
 const auto FrmRe = std::regex{"FRM-?[0-9]+"};
