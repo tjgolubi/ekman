@@ -38,7 +38,7 @@ namespace gsl = gsl_lite;
 
 namespace tjg {
 
-using MP   = ggl::model::multi_polygon<Polygon>;
+using MultiPolygon   = ggl::model::multi_polygon<Polygon>;
 using Ring = ggl::model::ring<Pt>;
 
 using CornerVec   = std::vector<gsl::index>;
@@ -67,7 +67,7 @@ void EnsureValid(const Geo& geo) {
   throw std::runtime_error{msg};
 } // EnsureValid
 
-MP ComputeInset(const Polygon& in, Distance offset) {
+MultiPolygon ComputeInset(const Polygon& in, Distance offset) {
   EnsureValid(in);
   gsl_Expects(offset >= 1.0 * metre);
 
@@ -78,7 +78,7 @@ MP ComputeInset(const Polygon& in, Distance offset) {
   auto end   = ggl::strategy::buffer::end_round{Tune::CirclePoints};
   auto point = ggl::strategy::buffer::point_circle{Tune::CirclePoints};
 
-  auto inset = MP{};
+  auto inset = MultiPolygon{};
   ggl::buffer(in, inset, distance, side, join, end, point);
   EnsureValid(inset);
   return inset;

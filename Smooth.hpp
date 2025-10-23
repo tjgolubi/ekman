@@ -9,7 +9,7 @@
 ///   - Pt/Vec algebra as discussed (Pt - Pt -> Vec, .norm(), etc.).
 
 #pragma once
-#include "geom.hpp"
+#include "geom_ggl.hpp"
 #include <boost/geometry/geometries/ring.hpp>
 #include <boost/geometry/geometries/linestring.hpp>
 #include <gsl-lite/gsl-lite.hpp>

@@ -38,10 +38,10 @@ using Ring = ggl::model::ring<Pt>;
 namespace {
 
 std::ostream& operator<<(std::ostream& os, const tjg::Pt& p)
-  { return os << p.x << ' ' << p.y; }
+  { return os << p.x() << ' ' << p.y(); }
 
 std::istream& operator>>(std::istream& os, tjg::Pt& p)
-  { return os >> p.x >> p.y; }
+  { return os >> p.x() >> p.y(); }
 
 #ifdef TJG_NOT_USED
 std::ostream& operator<<(std::ostream& os, const tjg::Ring& r) {

@@ -26,15 +26,15 @@ namespace gsl = gsl_lite;
 #include <vector>
 #include <cmath>
 
-namespace bg = boost::geometry;
+namespace ggl = boost::geometry;
 
 using geom::Radians;
 
 using Meters     = double;
 using Pt         = geom::Pt<Meters>;
 using Disp       = geom::Vec<Meters>;
-using Ring       = bg::model::ring<Pt>;
-using Linestring = bg::model::linestring<Pt>;
+using Ring       = ggl::model::ring<Pt>;
+using Linestring = ggl::model::linestring<Pt>;
 
 // ----------------------- Tunables -----------------------------------
 namespace Tune {
@@ -142,7 +142,7 @@ Linestring Smooth(const Ring& ring, gsl::index start, gsl::index stop) {
   // 2) If not dense, just DP-simplify lightly and return
   if (!ShouldSmooth(arc)) {
     auto sparse = Linestring{};
-    bg::simplify(arc, sparse, Tune::SimplifyTol);
+    ggl::simplify(arc, sparse, Tune::SimplifyTol);
     return (std::ssize(sparse) >= 2) ? sparse : arc;
   }
 
@@ -217,7 +217,7 @@ Linestring Smooth(const Ring& ring, gsl::index start, gsl::index stop) {
   // 11) Optional DP simplify (keeps endpoints)
   if (Tune::SimplifyTol > Meters{0} && std::ssize(smooth) > 2) {
     auto out = Linestring{};
-    bg::simplify(smooth, out, Tune::SimplifyTol);
+    ggl::simplify(smooth, out, Tune::SimplifyTol);
     if (std::ssize(out) >= 2) return out;
   }
   return smooth;

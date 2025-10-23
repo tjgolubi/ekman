@@ -5,6 +5,7 @@
 #include <boost/geometry/geometries/linestring.hpp>
 #include <boost/geometry/geometries/multi_linestring.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
+#include <boost/geometry/geometries/multi_polygon.hpp>
 #include <boost/geometry/geometries/ring.hpp>
 #include <boost/geometry/core/cs.hpp>
 
@@ -57,24 +58,29 @@ namespace farm_db {
 
 namespace ggl = boost::geometry;
 
-using GeoPoint      = LatLon;
-using GeoLineString = ggl::model::linestring<GeoPoint>;
-using GeoPolyLine   = ggl::model::multi_linestring<GeoLineString>;
-using GeoRing       = ggl::model::ring<GeoPoint, true >;
-using GeoHole       = ggl::model::ring<GeoPoint, false>;
-using GeoPolygon    = ggl::model::polygon<GeoPoint>;
+namespace geo {
+using Point        = LatLon;
+using LineString   = ggl::model::linestring<Point>;
+using PolyLine     = ggl::model::multi_linestring<LineString>;
+using Ring         = ggl::model::ring<Point, true >;
+using Hole         = ggl::model::ring<Point, false>;
+using Polygon      = ggl::model::polygon<Point>;
+using MultiPolygon = ggl::model::multi_polygon<Polygon>;
+using Path         = LineString;
+using MultiPath    = PolyLine;
+} // geo
 
-constexpr GeoPoint Geo(const Point& pt) noexcept { return pt.point; }
-constexpr Point MakePoint(const GeoPoint& pt, Point::Type type) noexcept
+constexpr geo::Point Geo(const Point& pt) noexcept { return pt.point; }
+constexpr Point MakePoint(const geo::Point& pt, Point::Type type) noexcept
   { return Point{pt, type}; }
 
-GeoLineString Geo(const LineString& lstr);
-GeoPolygon Geo(const Polygon& poly);
+geo::LineString Geo(const LineString& lstr);
+geo::Polygon Geo(const Polygon& poly);
 
-GeoRing MakeGeoRing(const LineString& lstr);
-GeoHole MakeGeoHole(const LineString& lstr);
+geo::Ring MakeGeoRing(const LineString& lstr);
+geo::Hole MakeGeoHole(const LineString& lstr);
 
-Path MakePath(const GeoLineString& lstr);
-Path MakePath(const GeoRing& ring);
+Path MakePath(const geo::LineString& lstr);
+Path MakePath(const geo::Ring& ring);
 
 } // farm_db

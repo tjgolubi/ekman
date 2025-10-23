@@ -19,7 +19,8 @@
 
 #include "Smooth.hpp"
 #include "Resample.hpp"
-#include "geom.hpp"
+
+#include "geom_ggl.hpp"
 
 #include <boost/geometry/geometries/multi_polygon.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
@@ -61,21 +62,17 @@ void DbgOut(const char* str, const T& x)
 
 #define DBG(x) DbgOut(BOOST_STRINGIZE(x), (x))
 
-namespace bg = boost::geometry;
+namespace ggl = boost::geometry;
 namespace fs = std::filesystem;
 
 using Meters = double;
 using Degrees = double;
 
-namespace geom {
-template<> struct SquaredType<Meters> { using type = double; };
-} // geom
-
 using Pt       = geom::Pt<Meters>;
 using Disp     = geom::Vec<Meters>;
-using Polygon  = bg::model::polygon<Pt>;
-using MP       = bg::model::multi_polygon<Polygon>;
-using Ring     = bg::model::ring<Pt>;
+using Polygon  = ggl::model::polygon<Pt>;
+using MultiPolygon       = ggl::model::multi_polygon<Polygon>;
+using Ring     = ggl::model::ring<Pt>;
 
 using CornerVec   = std::vector<gsl::index>;
 using PolyCorners = std::vector<CornerVec>;
@@ -120,10 +117,10 @@ constexpr Meters CorridorShrink     = 0.0;  // m
 namespace {
 
 std::ostream& operator<<(std::ostream& os, const Pt& p)
-  { return os << p.x << ' ' << p.y; }
+  { return os << p.x() << ' ' << p.y(); }
 
 std::istream& operator>>(std::istream& os, Pt& p)
-  { return os >> p.x >> p.y; }
+  { return os >> p.x() >> p.y(); }
 
 std::ostream& operator<<(std::ostream& os, const Ring& r) {
   for (const auto& p: r)
@@ -133,18 +130,18 @@ std::ostream& operator<<(std::ostream& os, const Ring& r) {
 
 #if 0
 void EnsureValid(const Ring& ring, bool isInner) {
-  auto failure = bg::validity_failure_type{};
-  if (bg::is_valid(ring, failure)) [[likely]] {
+  auto failure = ggl::validity_failure_type{};
+  if (ggl::is_valid(ring, failure)) [[likely]] {
     if (!isInner)
       return;
-    failure = bg::failure_wrong_orientation;
+    failure = ggl::failure_wrong_orientation;
   }
   else {
-    if (isInner && failure == bg::failure_wrong_orientation)
+    if (isInner && failure == ggl::failure_wrong_orientation)
       return;
   }
   auto msg = std::string{"Invalid ring: "};
-  msg += bg::validity_failure_type_message(failure);
+  msg += ggl::validity_failure_type_message(failure);
   throw std::runtime_error{msg};
 } // EnsureValid
 #endif
@@ -152,11 +149,11 @@ void EnsureValid(const Ring& ring, bool isInner) {
 template<class Geo>
 requires (!std::is_same_v<Geo, Ring>)
 void EnsureValid(const Geo& geo) {
-  auto failure = bg::validity_failure_type{};
-  if (bg::is_valid(geo, failure)) [[likely]]
+  auto failure = ggl::validity_failure_type{};
+  if (ggl::is_valid(geo, failure)) [[likely]]
     return;
   auto msg = std::string{"Invalid geometry: "};
-  msg += bg::validity_failure_type_message(failure);
+  msg += ggl::validity_failure_type_message(failure);
   throw std::runtime_error{msg};
 } // EnsureValid
 
@@ -210,7 +207,7 @@ Polygon ReadPolygon(const fs::path& path) {
     ring = &poly.inners().back();
   }
   in.close();
-  bg::correct(poly);
+  ggl::correct(poly);
   EnsureValid(poly);
   return poly;
 } // ReadPolygon
@@ -239,7 +236,7 @@ void WritePolygon(const Polygon& poly, const fs::path& path) {
   }
 } // WritePolygon
 
-void WriteMP(const MP& mp, const fs::path& path) {
+void WriteMP(const MultiPolygon& mp, const fs::path& path) {
   if (mp.size() == 1) {
     WritePolygon(mp.front(), path);
     return;
@@ -259,7 +256,7 @@ void WriteMP(const MP& mp, const fs::path& path) {
 Polygon MakePolygon(std::vector<Pt> pts) {
   auto ring = Ring{pts.begin(), pts.end()};
   auto poly = Polygon{ring};
-  bg::correct(poly);
+  ggl::correct(poly);
   EnsureValid(poly);
   return poly;
 }
@@ -278,7 +275,7 @@ void WriteDeflections(std::ostream& out, const Polygon& poly) {
     WriteDeflections(out, r);
 } // WriteDeflections
 
-void WriteDeflections(std::ostream& out, const MP& mp) {
+void WriteDeflections(std::ostream& out, const MultiPolygon& mp) {
   for (const auto& poly: mp)
     WriteDeflections(out, poly);
 }
@@ -339,7 +336,7 @@ void WriteCorners(const fs::path& path,
 #endif
 
 void WriteCorners(std::ostream& out,
-                  const MP& polys, const std::vector<PolyCorners>& mpCorners)
+                  const MultiPolygon& polys, const std::vector<PolyCorners>& mpCorners)
 {
   gsl_Expects(mpCorners.size() == polys.size());
   auto mp_iter = mpCorners.begin();
@@ -348,7 +345,7 @@ void WriteCorners(std::ostream& out,
 } // WriteCorners
 
 void WriteCorners(const fs::path& path,
-                  const MP& polys, const std::vector<PolyCorners>& allCorners)
+                  const MultiPolygon& polys, const std::vector<PolyCorners>& allCorners)
 {
   auto out = std::ofstream{path, std::ios::binary};
   if (!out)
@@ -408,18 +405,18 @@ template<class Geo>
 auto Simplify(const Geo& geo, Meters tolerance = Meters{1}) -> Geo {
   gsl_Expects(tolerance >= Meters{0.01});
   auto simp = Geo{};
-  auto failure = bg::validity_failure_type{};
+  auto failure = ggl::validity_failure_type{};
   while (tolerance >= Meters{0.01}) {
-    bg::simplify(geo, simp, tolerance);
-    if (bg::is_valid(simp, failure) || failure == bg::failure_wrong_orientation)
+    ggl::simplify(geo, simp, tolerance);
+    if (ggl::is_valid(simp, failure) || failure == ggl::failure_wrong_orientation)
       return simp;
     switch (failure) {
-      case bg::failure_self_intersections:
-      case bg::failure_few_points:
+      case ggl::failure_self_intersections:
+      case ggl::failure_few_points:
         break;
       default: {
         auto msg = std::string{"Simplify: invalid result: "};
-        msg += bg::validity_failure_type_message(failure);
+        msg += ggl::validity_failure_type_message(failure);
         throw std::runtime_error{msg};
       }
     }
@@ -482,22 +479,22 @@ void AdjustCorners(Ring& ring, CornerVec& corners) {
   ring.push_back(ring.front()); // close ring
 } // AdjustCorners
 
-MP ComputeInset(const Polygon& in, Meters offset) {
+MultiPolygon ComputeInset(const Polygon& in, Meters offset) {
   EnsureValid(in);
   gsl_Expects(offset >= Meters{1});
 
   // ---- Inset buffer (negative distance) ----
-  auto distance = bg::strategy::buffer::distance_symmetric<Meters>{-offset};
-  auto side     = bg::strategy::buffer::side_straight{};
-  //  auto join     = bg::strategy::buffer::join_miter{}; // {Tune::MiterLimit};
-  auto join     = bg::strategy::buffer::join_round{Tune::CirclePoints};
-  //  auto end      = bg::strategy::buffer::end_flat{};
-  auto end      = bg::strategy::buffer::end_round{Tune::CirclePoints};
-  auto point    = bg::strategy::buffer::point_circle{Tune::CirclePoints};
-  //  auto point    = bg::strategy::buffer::point_square{};
+  auto distance = ggl::strategy::buffer::distance_symmetric<Meters>{-offset};
+  auto side     = ggl::strategy::buffer::side_straight{};
+  //  auto join     = ggl::strategy::buffer::join_miter{}; // {Tune::MiterLimit};
+  auto join     = ggl::strategy::buffer::join_round{Tune::CirclePoints};
+  //  auto end      = ggl::strategy::buffer::end_flat{};
+  auto end      = ggl::strategy::buffer::end_round{Tune::CirclePoints};
+  auto point    = ggl::strategy::buffer::point_circle{Tune::CirclePoints};
+  //  auto point    = ggl::strategy::buffer::point_square{};
 
-  auto inset = MP{};
-  bg::buffer(in, inset, distance, side, join, end, point);
+  auto inset = MultiPolygon{};
+  ggl::buffer(in, inset, distance, side, join, end, point);
   EnsureValid(inset);
   std::cout << "Inset generated " << inset.size() << " polygons.\n";
   return inset;
@@ -520,7 +517,7 @@ Ring Smooth(Ring ring) {
     auto line = Smooth(ring, corners[i], corners[i+1]);
     dst.append_range(line);
   }
-  bg::correct(dst);
+  ggl::correct(dst);
   return dst;
 } // Smooth ring
 
@@ -530,7 +527,7 @@ void Smooth(Polygon& poly) {
     r = Smooth(r);
 } // Smooth polygon
 
-void Smooth(MP& mp) {
+void Smooth(MultiPolygon& mp) {
   for (auto& p: mp)
     Smooth(p);
 } // Smooth multi-polygon
@@ -596,13 +593,13 @@ int main(int argc, const char* argv[]) {
     // Optional light cleanup for the path we’ll buffer/drive
     if (kSimplifyInputTol > 0.0) {
       auto simp = Polygon{};
-      bg::simplify(poly_in, simp, kSimplifyInputTol);
+      ggl::simplify(poly_in, simp, kSimplifyInputTol);
       poly_in = std::move(simp);
     }
 
     // ---- Corner detection on ORIGINAL perimeter via DP(0.5 m)
     auto poly_dp = Polygon{};
-    bg::simplify(poly_in, poly_dp, kSimplifyForCorners);
+    ggl::simplify(poly_in, poly_dp, kSimplifyForCorners);
 
     // Extract unique vertices from original & simplified
     auto Rorig = std::vector<Pt>{};
@@ -625,23 +622,23 @@ int main(int argc, const char* argv[]) {
           MapCornersToOriginal(Rorig, Rsimp, simp_corners, kSimplifyForCorners);
 
     // ---- Inset buffer (negative distance) ----
-    auto distance = bg::strategy::buffer::distance_symmetric<double>{-offset};
-    auto side     = bg::strategy::buffer::side_straight;
-    auto join_m   = bg::strategy::buffer::join_miter{kMiterLimit};
-    auto end      = bg::strategy::buffer::end_flat;
-    auto circle   = bg::strategy::buffer::point_circle{kCirclePoints};
+    auto distance = ggl::strategy::buffer::distance_symmetric<double>{-offset};
+    auto side     = ggl::strategy::buffer::side_straight;
+    auto join_m   = ggl::strategy::buffer::join_miter{kMiterLimit};
+    auto end      = ggl::strategy::buffer::end_flat;
+    auto circle   = ggl::strategy::buffer::point_circle{kCirclePoints};
 
-    auto inset_mp = MP{};
-    bg::buffer(poly_in, inset_mp, distance, side, join_m, end, circle);
+    auto inset_mp = MultiPolygon{};
+    ggl::buffer(poly_in, inset_mp, distance, side, join_m, end, circle);
     const Polygon& inset_poly0 = BiggestByArea(inset_mp);
     Polygon inset_poly = inset_poly0;
 
     if (kSimplifyInsetTol > 0.0) {
       auto simp = Polygon{};
-      bg::simplify(inset_poly, simp, kSimplifyInsetTol);
-      bg::correct(simp);
+      ggl::simplify(inset_poly, simp, kSimplifyInsetTol);
+      ggl::correct(simp);
       inset_poly = std::move(simp);
-      bg::unique(inset_poly);
+      ggl::unique(inset_poly);
     }
 
     // Extract INSET unique ring
@@ -657,11 +654,11 @@ int main(int argc, const char* argv[]) {
     // ---- Optional corridor (disabled here if kCorridorShrink == 0)
     auto corridor = std::optional<Polygon>{};
     if (kCorridorShrink > 0.0) {
-      MP corr_mp;
+      MultiPolygon corr_mp;
       auto dist2 =
-            bg::strategy::buffer::distance_symmetric<double>{-kCorridorShrink};
-      auto j2 = bg::strategy::buffer::join_miter{kMiterLimit};
-      bg::buffer(inset_poly, corr_mp, dist2, side, j2, end, circle);
+            ggl::strategy::buffer::distance_symmetric<double>{-kCorridorShrink};
+      auto j2 = ggl::strategy::buffer::join_miter{kMiterLimit};
+      ggl::buffer(inset_poly, corr_mp, dist2, side, j2, end, circle);
       corridor = BiggestByArea(corr_mp);
     }
 

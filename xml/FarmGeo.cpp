@@ -13,17 +13,17 @@
 
 namespace farm_db {
 
-GeoLineString Geo(const LineString& lstr) {
-  auto out = GeoLineString{};
+geo::LineString Geo(const LineString& lstr) {
+  auto out = geo::LineString{};
   out.reserve(lstr.points.size());
   for (const auto& p: lstr.points)
     out.push_back(Geo(p));
   return out;
 } // Geo(LineString)
 
-GeoRing MakeGeoRing(const LineString& lstr) {
+geo::Ring MakeGeoRing(const LineString& lstr) {
   auto ls = Geo(lstr);
-  auto out = GeoRing{ls.begin(), ls.end()};
+  auto out = geo::Ring{ls.begin(), ls.end()};
   ggl::correct(out);
   auto msg = std::string{};
   if (!ggl::is_valid(out, msg))
@@ -31,9 +31,9 @@ GeoRing MakeGeoRing(const LineString& lstr) {
   return out;
 } // MakeGeoRing
 
-GeoHole MakeGeoHole(const LineString& lstr) {
+geo::Hole MakeGeoHole(const LineString& lstr) {
   auto ls = Geo(lstr);
-  auto out = GeoHole{ls.begin(), ls.end()};
+  auto out = geo::Hole{ls.begin(), ls.end()};
   ggl::correct(out);
   auto msg = std::string{};
   if (!ggl::is_valid(out, msg))
@@ -41,8 +41,8 @@ GeoHole MakeGeoHole(const LineString& lstr) {
   return out;
 } // MakeGeoHole
 
-GeoPolygon Geo(const Polygon& poly) {
-  auto out = GeoPolygon{};
+geo::Polygon Geo(const Polygon& poly) {
+  auto out = geo::Polygon{};
   out.outer() = MakeGeoRing(poly.outer);
   for (const auto& p: poly.inners)
     out.inners().push_back(MakeGeoRing(p));
@@ -53,7 +53,7 @@ GeoPolygon Geo(const Polygon& poly) {
   return out;
 } // Geo(Polygon)
 
-Path MakePath(const GeoLineString& lstr) {
+Path MakePath(const geo::LineString& lstr) {
   auto rval = Path{};
   rval.reserve(lstr.size());
   for (const auto& p: lstr)
@@ -61,7 +61,7 @@ Path MakePath(const GeoLineString& lstr) {
   return rval;
 }
 
-Path MakePath(const GeoRing& ring) {
+Path MakePath(const geo::Ring& ring) {
   auto rval = Path{};
   rval.reserve(ring.size());
   for (const auto& p: ring)
